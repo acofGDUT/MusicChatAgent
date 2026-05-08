@@ -1,0 +1,19 @@
+# --- QQ音乐 API 核心 ---
+qqmusic-api
+
+# --- LangChain Agent 框架 ---
+langchain
+langchain-openai
+langchainhub
+langsmith[openai-agents]
+
+# --- 后端与基础工具 ---
+fastapi
+uvicorn
+pydantic
+pydantic-settings
+python-dotenv
+
+# --- 网络与异步 ---
+httpx
+aiofiles
