@@ -1,18 +1,9 @@
 import json
 from langchain.tools import tool
 from pydantic import BaseModel, Field
-from qqmusic_api import Session
-import app.core.auth as auth_module
-from app.core.auth import ensure_credential_loaded
+
 from app.services.music import search_service
-from qqmusic_api.search import SearchType
-
-
-async def _with_qqmusic_session() -> Session:
-    ready = await ensure_credential_loaded()
-    if not ready or auth_module.GLOBAL_CREDENTIAL is None:
-        raise RuntimeError("QQ 音乐凭证未初始化，请检查 data/credential.json")
-    return Session(credential=auth_module.GLOBAL_CREDENTIAL)
+from qqmusic_api.modules.search import SearchType
 
 # ================= 1. 定义工具的输入结构 (给大模型戴上紧箍咒) =================
 
@@ -61,14 +52,13 @@ async def search_music_tool(keyword: str, search_type: str = "SONG", num: int = 
         # 如果大模型瞎传，默认 fallback 到 SONG
         actual_enum_type = type_map.get(search_type.upper(), SearchType.SONG)
 
-        # 2. 调用我们已经写好的、极其强大的 Service 层洗数据方法
-        async with await _with_qqmusic_session():
-            res = await search_service.search_by_type(
-                keyword=keyword,
-                search_type=actual_enum_type,
-                num=num,
-                highlight=False
-            )
+        # 2. 调用 Service 层洗数据方法
+        res = await search_service.search_by_type(
+            keyword=keyword,
+            search_type=actual_enum_type,
+            num=num,
+            highlight=False
+        )
 
         # 3. 错误处理
         if res.get("status") == "error":
@@ -100,8 +90,7 @@ async def get_hotkeys_tool() -> str:
     它会返回当前 QQ 音乐的实时热搜榜单以及特别推荐。
     """
     try:
-        async with await _with_qqmusic_session():
-            res = await search_service.get_hotkeys()
+        res = await search_service.get_hotkeys()
 
         # 1. 错误拦截：适配新版 service 返回的 status 字段
         if res.get("status") == "error":
@@ -133,6 +122,5 @@ async def get_hotkeys_tool() -> str:
 
         # 将列表合并成一段带换行的长文本返回给大模型
         return "\n".join(formatted_lines)
-
     except Exception as e:
         return f"工具执行异常：{str(e)}。请自行安抚用户并随便推荐两首歌。"

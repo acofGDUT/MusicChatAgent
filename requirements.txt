@@ -1,5 +1,5 @@
 # --- QQ音乐 API 核心 ---
-qqmusic-api==0.4.1
+qqmusic-api-python==0.6.0
 
 # --- LangChain Agent 框架 ---
 langchain

@@ -1,17 +1,7 @@
 from typing import List
 from langchain.tools import tool
 from pydantic import BaseModel, Field
-from qqmusic_api import Session
-import app.core.auth as auth_module
-from app.core.auth import ensure_credential_loaded
 from app.services.music.playlist_service import playlist_service
-
-
-async def _with_qqmusic_session() -> Session:
-    ready = await ensure_credential_loaded()
-    if not ready or auth_module.GLOBAL_CREDENTIAL is None:
-        raise RuntimeError("QQ 音乐凭证未初始化，请检查 data/credential.json")
-    return Session(credential=auth_module.GLOBAL_CREDENTIAL)
 
 
 # ================= 1. 定义输入结构 =================
@@ -112,9 +102,8 @@ async def add_songs_to_playlist_tool(song_ids: List[int], dirid: int = 1) -> str
     绝对禁止为了凑数而更换 song_ids 反复重试！调用一次后立即结束当前加歌动作。
     """
     try:
-        async with await _with_qqmusic_session():
-            # 调用我们之前写好的底层 Service
-            success = await playlist_service.add_songs_to_playlist(song_ids=song_ids, dirid=dirid)
+        # 调用 service；凭证初始化已内聚在 service 层
+        success = await playlist_service.add_songs_to_playlist(song_ids=song_ids, dirid=dirid)
 
         if success:
             return f"🎉 操作成功！系统确认已将这 {len(song_ids)} 首歌曲加入了歌单(dirid={dirid})。"
@@ -173,8 +162,7 @@ async def create_playlist_tool(name: str) -> str:
         if not clean_name:
             return "❌ 创建歌单失败：歌单名称不能为空。"
 
-        async with await _with_qqmusic_session():
-            res = await playlist_service.create_playlist(name=clean_name)
+        res = await playlist_service.create_playlist(name=clean_name)
 
         if not isinstance(res, dict):
             return f"❌ 创建歌单失败：返回数据格式异常，res={res}"
@@ -182,10 +170,9 @@ async def create_playlist_tool(name: str) -> str:
         if "error" in res:
             return f"❌ 创建歌单失败：{res['error']}"
 
-        # 兼容不同字段命名：dirId / dirid
-        raw_dirid = res.get("dirId", res.get("dirid"))
-        raw_tid = res.get("tid")
-        actual_name = res.get("dirName", clean_name)
+        raw_dirid = res.get("dirid")
+        raw_tid = res.get("id")
+        actual_name = res.get("name", clean_name)
 
         try:
             new_dirid = int(raw_dirid)
@@ -219,14 +206,13 @@ async def add_by_keyword_to_playlist_tool(
     适用于“给我的某歌单加N首某歌手歌曲”这类需求。
     """
     try:
-        async with await _with_qqmusic_session():
-            res = await playlist_service.add_songs_by_keyword_to_playlist(
-                playlist_name=playlist_name,
-                keyword=keyword,
-                target_count=target_count,
-                search_page_size=search_page_size,
-                max_expand_rounds=max_expand_rounds,
-            )
+        res = await playlist_service.add_songs_by_keyword_to_playlist(
+            playlist_name=playlist_name,
+            keyword=keyword,
+            target_count=target_count,
+            search_page_size=search_page_size,
+            max_expand_rounds=max_expand_rounds,
+        )
 
         status = res.get("status")
         if status == "error":
@@ -282,14 +268,13 @@ async def get_playlist_detail_tool(
         )
 
     try:
-        async with await _with_qqmusic_session():
-            res = await playlist_service.get_playlist_detail(
-                songlist_id=songlist_id,
-                dirid=dirid,
-                num=num,
-                page=page,
-                onlysong=onlysong,
-            )
+        res = await playlist_service.get_playlist_detail(
+            songlist_id=songlist_id,
+            dirid=dirid,
+            num=num,
+            page=page,
+            onlysong=onlysong,
+        )
 
         if res.get("status") == "error":
             return f"❌ 获取歌单详情失败：{res.get('message', '未知错误')}"
@@ -365,8 +350,7 @@ async def delete_playlist_tool(dirid: int) -> str:
         return "❌ 拒绝执行：dirid=1 是用户的系统默认'我喜欢'歌单，无法整体删除。如果你想取消喜欢某首歌，请使用 remove_songs_from_playlist_tool。"
 
     try:
-        async with await _with_qqmusic_session():
-            success = await playlist_service.delete_playlist(dirid=dirid)
+        success = await playlist_service.delete_playlist(dirid=dirid)
 
         if success:
             return f"🗑️ 歌单(dirid={dirid})已成功删除！"
@@ -394,8 +378,7 @@ async def remove_songs_from_playlist_tool(song_ids: List[int], dirid: int) -> st
         return "❌ 移除失败：song_ids 不能为空。请先查询歌单内歌曲并确定要移除的 song_id。"
 
     try:
-        async with await _with_qqmusic_session():
-            success = await playlist_service.remove_songs_from_playlist(song_ids=song_ids, dirid=dirid)
+        success = await playlist_service.remove_songs_from_playlist(song_ids=song_ids, dirid=dirid)
 
         if success:
             return f"✂️ 成功将 {len(song_ids)} 首歌曲从歌单(dirid={dirid})中移除了！"

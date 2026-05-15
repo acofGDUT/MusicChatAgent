@@ -1,18 +1,7 @@
 import json
 from langchain.tools import tool
 from pydantic import BaseModel, Field
-from qqmusic_api import Session
-import app.core.auth as auth_module
-from app.core.auth import ensure_credential_loaded
-
 from app.services.music import user_service
-
-
-async def _with_qqmusic_session() -> Session:
-    ready = await ensure_credential_loaded()
-    if not ready or auth_module.GLOBAL_CREDENTIAL is None:
-        raise RuntimeError("QQ 音乐凭证未初始化，请检查 data/credential.json")
-    return Session(credential=auth_module.GLOBAL_CREDENTIAL)
 
 
 # 假设你把获取用户信息的 service 实例命名为 user_service
@@ -39,9 +28,8 @@ async def get_fav_song_tool(page: int = 1, num: int = 20) -> str:
     【用户资产工具】用于获取用户收藏的歌曲（也就是“我喜欢”的歌曲）。
     """
     try:
-        async with await _with_qqmusic_session():
-            # 调用我们刚刚写好的、极其干净的 Service 层方法
-            res = await user_service.get_fav_song(page=page, num=num)
+        # 调用 Service 层方法
+        res = await user_service.get_fav_song(page=page, num=num)
 
         # 1. 处理报错情况
         if res.get("status") == "error":
@@ -86,9 +74,8 @@ async def get_created_songlist_tool() -> str:
     返回的 tid 字段是歌单的唯一标识，后续如果需要获取歌单内的歌曲，请使用该 tid。
     """
     try:
-        async with await _with_qqmusic_session():
-            # 调用保留了原始字段名的 Service
-            res = await user_service.get_created_songlist()
+        # 调用保留了原始字段名的 Service
+        res = await user_service.get_created_songlist()
 
         # 1. 处理报错情况
         if res.get("status") == "error":
@@ -142,9 +129,8 @@ async def get_fav_songlist_tool(page: int = 1, num: int = 20) -> str:
     比如需要添加歌曲到某某歌单（“我喜欢”也是一种歌单）。可以先用这个工具查询dirid。
     """
     try:
-        async with await _with_qqmusic_session():
-            # 调用清洗好的 Service
-            res = await user_service.get_fav_songlist(page=page, num=num)
+        # 调用清洗好的 Service
+        res = await user_service.get_fav_songlist(page=page, num=num)
 
         # 1. 处理报错情况
         if res.get("status") == "error":

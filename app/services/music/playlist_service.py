@@ -1,8 +1,8 @@
 import logging
 from typing import Any
-import qqmusic_api.songlist as qq_songlist
+from qqmusic_api.models.search import SongSearch
 
-from qqmusic_api.search import SearchType
+from app.core.client import create_client
 from app.services.music.search_service import search_service
 from app.services.music.user_service import user_service
 
@@ -13,7 +13,7 @@ class PlaylistService:
     """
     歌单相关服务。
     用于管理用户的歌单资产（查、建、删、加歌、删歌）。
-    依赖底层中间件提供的全局 Session 凭证。
+    依赖全局 Credential，在 service 层统一初始化 Client。
     """
 
     # ================= 查询类操作 =================
@@ -41,48 +41,46 @@ class PlaylistService:
             return {"status": "error", "message": "必须提供 songlist_id 或 dirid 其中之一"}
 
         try:
-            # 调用底层 API
-            raw_data = await qq_songlist.get_detail(
-                songlist_id=songlist_id,
-                dirid=dirid,
-                num=num,
-                page=page,
-                onlysong=onlysong,
-                tag=not onlysong,
-                userinfo=not onlysong
-            )
+            async with await create_client() as client:
+                detail = await client.songlist.get_detail(
+                    songlist_id=songlist_id,
+                    dirid=dirid,
+                    num=num,
+                    page=page,
+                    onlysong=onlysong,
+                    tag=not onlysong,
+                    userinfo=not onlysong,
+                )
 
             # 2. 初始化瘦身后的返回结构
             result = {
                 "status": "success",
-                "total_song_num": raw_data.get("total_song_num", 0),
+                "total_song_num": detail.total,
                 "songlist": []
             }
 
             # 3. 提取歌单的基本信息 (仅在 onlysong 为 False 且数据存在时)
-            if not onlysong and "dirinfo" in raw_data:
-                dirinfo = raw_data["dirinfo"]
-                creator = dirinfo.get("creator", {})
+            if not onlysong:
+                info = detail.info
                 result["playlist_info"] = {
-                    "title": dirinfo.get("title", "未知歌单"),
-                    "description": dirinfo.get("desc", ""),
-                    "creator": creator.get("nick", "未知"),
-                    "dirid": dirinfo.get("dirid", 0),
-                    "songlist_id": dirinfo.get("id", 0)
+                    "title": info.title,
+                    "description": info.desc,
+                    "creator": info.creator.nick,
+                    "dirid": info.dirid,
+                    "songlist_id": info.id,
                 }
 
             # 4. 提取歌曲的核心信息 (mid, 歌名, 歌手, 专辑)
-            for song in raw_data.get("songlist", []):
-                # 将歌手列表拼装成一个字符串，例如 "陈奕迅 & 王菲"
-                singers = [s.get("name", "") for s in song.get("singer", [])]
+            for song in detail.songs:
+                singers = [s.name for s in song.singer]
                 singer_names = " & ".join(filter(None, singers))
 
                 cleaned_song = {
-                    "mid": song.get("mid", ""),
-                    "title": song.get("title", song.get("name", "")),
+                    "mid": song.mid,
+                    "title": song.title or song.name,
                     "singer": singer_names,
-                    "album": song.get("album", {}).get("title", ""),
-                    "publish_time": song.get("time_public", "")
+                    "album": song.album.title if song.album else "",
+                    "publish_time": song.time_public,
                 }
                 result["songlist"].append(cleaned_song)
 
@@ -98,11 +96,26 @@ class PlaylistService:
 
     async def get_all_songs_in_playlist(self, songlist_id: int, dirid: int = 0) -> list[dict[str, Any]]:
         """
-        [高能消耗] 获取一个歌单里的**所有**歌曲。
-        库底层会自动并发请求拉取所有页的数据并合并，适合用来做数据分析或全量备份。
+        获取一个歌单里的所有歌曲（自动分页）。
         """
         try:
-            return await qq_songlist.get_songlist(songlist_id=songlist_id, dirid=dirid)
+            async with await create_client() as client:
+                songs = await client.songlist.get_detail.all_pages_items(
+                    songlist_id=songlist_id,
+                    dirid=dirid,
+                    num=100,
+                    onlysong=True,
+                    tag=False,
+                    userinfo=False,
+                )
+            return [
+                {
+                    "id": song.id,
+                    "mid": song.mid,
+                    "title": song.title or song.name,
+                }
+                for song in songs
+            ]
         except Exception as e:
             logger.error(f"❌ 获取歌单全量歌曲失败 (ID: {songlist_id}): {e}")
             return []
@@ -117,9 +130,14 @@ class PlaylistService:
         :return: 返回创建成功的歌单信息 (包含新生成的 dirid 和 songlist_id)
         """
         try:
-            result = await qq_songlist.create(dirname=name)
+            async with await create_client() as client:
+                result = await client.songlist.create(dirname=name)
             logger.info(f"✅ 成功创建歌单: {name}")
-            return result
+            return {
+                "id": result.id,
+                "dirid": result.dirid,
+                "name": result.name,
+            }
         except Exception as e:
             logger.error(f"❌ 创建歌单失败 ({name}): {e}")
             return {"error": str(e)}
@@ -132,7 +150,9 @@ class PlaylistService:
         :return: bool 是否删除成功
         """
         try:
-            success = await qq_songlist.delete(dirid=dirid)
+            async with await create_client() as client:
+                result = await client.songlist.delete(dirid=dirid)
+            success = result.retCode == 0 and result.dirid != 0
             if success:
                 logger.info(f"🗑️ 成功删除歌单 (dirid: {dirid})")
             else:
@@ -142,7 +162,7 @@ class PlaylistService:
             logger.error(f"❌ 删除歌单异常 (dirid: {dirid}): {e}")
             return False
 
-    async def add_songs_to_playlist(self, song_ids: list[int], dirid: int = 1) -> bool:
+    async def add_songs_to_playlist(self, song_ids: list[int], dirid: int = 1, tid: int = 0) -> bool:
         """
         批量添加歌曲到指定歌单。
 
@@ -154,14 +174,16 @@ class PlaylistService:
             return False
 
         try:
-            success = await qq_songlist.add_songs(dirid=dirid, song_ids=song_ids)
+            song_info = [(sid, 0) for sid in song_ids]
+            async with await create_client() as client:
+                success = await client.songlist.add_songs(dirid=dirid, song_info=song_info, tid=tid)
             logger.info(f"🎵 向歌单 {dirid} 添加 {len(song_ids)} 首歌曲结果: {success}")
             return success
         except Exception as e:
             logger.error(f"❌ 批量加歌失败 (dirid: {dirid}): {e}")
             return False
 
-    async def remove_songs_from_playlist(self, song_ids: list[int], dirid: int = 1) -> bool:
+    async def remove_songs_from_playlist(self, song_ids: list[int], dirid: int = 1, tid: int = 0) -> bool:
         """
         批量从指定歌单中移除歌曲。
         """
@@ -169,7 +191,9 @@ class PlaylistService:
             return False
 
         try:
-            success = await qq_songlist.del_songs(dirid=dirid, song_ids=song_ids)
+            song_info = [(sid, 0) for sid in song_ids]
+            async with await create_client() as client:
+                success = await client.songlist.del_songs(dirid=dirid, song_info=song_info, tid=tid)
             logger.info(f"✂️ 从歌单 {dirid} 移除 {len(song_ids)} 首歌曲结果: {success}")
             return success
         except Exception as e:
@@ -265,7 +289,7 @@ class PlaylistService:
             for page in range(1, max_expand_rounds + 1):
                 search_res = await search_service.search_by_type(
                     keyword=keyword,
-                    search_type=SearchType.SONG,
+                    search_type=SongSearch.SONG,
                     num=search_page_size,
                     page=page,
                 )
@@ -322,7 +346,7 @@ class PlaylistService:
                 }
 
             to_add = pending_song_ids[:target_count]
-            add_ok = await self.add_songs_to_playlist(song_ids=to_add, dirid=dirid)
+            add_ok = await self.add_songs_to_playlist(song_ids=to_add, dirid=dirid, tid=songlist_tid)
 
             # 关键改进：底层 add_songs 的布尔值可能与“实际是否已入歌单”不完全一致。
             # 因此统一做一次写后校验，避免把“实际成功”误判为失败。

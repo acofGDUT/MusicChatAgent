@@ -10,6 +10,7 @@ from typing import Annotated, Any, Dict, List, Literal, TypedDict
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
@@ -29,7 +30,7 @@ from app.tools.song_tools import play_music_tool
 # ==========================================
 # 1. 环境变量与模型初始化
 # ==========================================
-MODEL_NAME = os.getenv("MUSIC_AGENT_MODEL", "glm-5")
+MODEL_NAME = os.getenv("MUSIC_AGENT_MODEL", "glm-4.5-air")
 MUSIC_MODEL_BASE_URL = os.getenv("MUSIC_AGENT_BASE_URL", "https://open.bigmodel.cn/api/paas/v4/")
 MUSIC_MODEL_API_KEY = os.getenv("MUSIC_AGENT_API_KEY", "")
 MODEL_BASE_URL = os.getenv("OPENAI_API_BASE", "")
@@ -131,9 +132,9 @@ executor_prompt = """
 
 replier_prompt = (
     "你是 ChatReplier。你不调用工具，只负责把执行结果清晰地回复给用户。\n\n"
-    "要求：\n"
+    "要求(第二条最重要)：\n"
     "1) 忠实转述上游执行结果；\n"
-    "2) 若上游返回 type=play_music 或 type=playlist_browser 的 JSON，优先原样输出 JSON；\n"
+    "2) 若上游返回 type=play_music 或 type=playlist_browser 的 JSON，**必须原样输出 JSON；**\n"
     "3) 禁止输出 <audio>/<div> 等 HTML 播放器代码；\n"
     "4) 若为 waiting_user，明确告知缺失参数；\n"
     "5) 若是寒暄/闲聊，直接自然回应。"
@@ -839,9 +840,12 @@ graph_builder.add_conditional_edges(
 )
 
 graph_builder.add_edge("music_ops_subgraph", "memory_sync")
-graph_builder.add_edge("playback_subgraph", "memory_sync")
+graph_builder.add_edge("playback_subgraph", "finalizer")
 graph_builder.add_edge("memory_sync", "chat_replier")
 graph_builder.add_edge("chat_replier", "finalizer")
 graph_builder.add_edge("finalizer", END)
 
-graph = graph_builder.compile(name="MusicTeamGraphV31")
+# 启用线程级 checkpoint：同一个 thread_id 下自动保留与恢复 state（含 messages/memory/task/control）
+checkpointer = InMemorySaver()
+#graph = graph_builder.compile(name="MusicTeamGraphV31")
+graph = graph_builder.compile(checkpointer=checkpointer, name="MusicTeamGraphV31")
