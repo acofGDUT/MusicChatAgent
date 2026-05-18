@@ -13,3 +13,6 @@ app/agents/memory/history.jsonl
 # frontend build artifacts
 music-agent-chat-ui/.next/
 music-agent-chat-ui/node_modules/
+
+# ignore local UI worktree/submodule directory
+agent-chat-ui/
