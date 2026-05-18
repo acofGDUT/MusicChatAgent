@@ -4,3 +4,12 @@ __pycache__/
 .idea/
 data/credential.json
 data/cookie.txt
+
+# runtime/cache artifacts
+*.pckl
+.langgraph_api/
+app/agents/memory/history.jsonl
+
+# frontend build artifacts
+music-agent-chat-ui/.next/
+music-agent-chat-ui/node_modules/
