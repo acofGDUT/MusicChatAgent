@@ -58,7 +58,7 @@ def now_iso() -> str:
 def ensure_memory_files() -> None:
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     if not USER_PROFILE_PATH.exists():
-        USER_PROFILE_PATH.write_text("# 用户画像（User Profile）\n\n## 基础偏好\n- 常听歌手：\n- 常见风格：\n- 常用语言：\n- 使用场景：\n\n## 操作习惯\n- 偏好歌单命名：\n- 添加歌曲策略偏好：\n- 是否偏好自动创建歌单：\n\n## 约束与禁忌\n- 不希望添加的类型：\n- 明确拒绝项：\n\n## 长期记忆实体\n- 常用歌单（name -> dirid）：\n- 高频关键词：\n\n## 更新时间\n- last_updated: \n- update_reason: init\n", encoding="utf-8")
+        USER_PROFILE_PATH.write_text("# 用户画像（User Profile）\n\n## 用户偏好（带置信度）\n- 喜欢歌手（high）：\n- 喜欢歌手（medium）：\n- 常见风格：\n- 常用语言：\n\n## 使用与任务偏好\n- 常见请求：\n- 播放策略偏好：\n- 歌单操作偏好：\n\n## 约束与禁忌\n- 不希望添加的类型：unknown\n- 明确拒绝项：unknown\n- 冲突处理：当用户偏好与平台/安全规则冲突时，优先遵守平台与安全规则\n\n## 长期记忆实体（结构化）\n- 常用歌单（name -> dirid）：\n- 关键歌曲消歧：\n\n## 画像维护元信息\n- last_updated: \n- update_reason: init\n- profile_version: 2\n", encoding="utf-8")
     if not SOUL_PATH.exists():
         SOUL_PATH.write_text("# Music Agent Soul\n\n## Identity\n- 我是谁：QQ音乐多代理音乐助理\n- 服务边界：仅执行音乐与播放相关能力\n\n## Non-Negotiables\n- 不编造工具结果\n- 不在失败后盲重试\n- 未授权不执行高风险操作\n\n## Style\n- 语气：友好、简洁\n- 简洁度：中\n- 解释深度：按需\n\n## Decision Policy\n- 成功优先级：高\n- 安全优先级：最高\n- 澄清触发条件：必要槽位缺失\n\n## Evolution Log\n- version: 1\n- last_updated: init\n- change_summary: init\n- approved_by: system\n", encoding="utf-8")
     if not HISTORY_PATH.exists():

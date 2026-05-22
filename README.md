@@ -21,7 +21,7 @@
 
 请先确保本机具备：
 
-- **Python**：建议 3.10+
+- **Python**：推荐 **3.12.6**（当前项目已按该版本验证）
 - **Node.js**：建议 18+
 - **包管理器**：`npm`（项目中也包含 `pnpm-lock.yaml`，若你使用 pnpm 也可）
 - **操作系统**：Windows / macOS / Linux 均可
@@ -39,17 +39,11 @@
 
 ## 4. 第一步：启动后端（本地）
 
-在项目根目录（`MusicChatAgent`）打开终端，执行：
+在项目根目录（`MusicChatAgent`）打开终端。
 
-```bash
-python -m venv .venv
-```
+> 你当前环境是 Python 3.12.6，可**直接安装依赖并启动**，不强制要求虚拟环境。
 
-Windows（PowerShell）激活虚拟环境：
-
-```bash
-.\.venv\Scripts\Activate.ps1
-```
+### 方案 A（推荐给你当前场景）：不使用虚拟环境
 
 安装依赖：
 
@@ -60,6 +54,27 @@ pip install -r requirements.txt
 启动后端：
 
 ```bash
+python main.py
+```
+
+### 方案 B（可选）：使用虚拟环境
+
+创建虚拟环境：
+
+```bash
+python -m venv .venv
+```
+
+Windows（PowerShell）激活：
+
+```bash
+.\.venv\Scripts\Activate.ps1
+```
+
+安装依赖并启动：
+
+```bash
+pip install -r requirements.txt
 python main.py
 ```
 
@@ -172,7 +187,21 @@ pip install -r requirements.txt
 
 ---
 
-## 10. 相关说明
+## 10. 运行截图
+
+### 聊天返回示例
+
+![聊天返回示例](docs/images/chat-response.png)
+
+### LangSmith 追踪过程
+
+![LangSmith 追踪过程](docs/images/image.png)
+
+> 说明：其余截图暂未加入 README，可后续按需补充。
+
+---
+
+## 11. 相关说明
 
 - 前端原始模板与更完整 UI 说明见：`music-agent-chat-ui/README.md`
 - 本 README 目标是“本地联调与体验优先”，不覆盖完整生产部署流程
