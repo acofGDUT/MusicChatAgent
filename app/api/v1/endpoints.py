@@ -21,23 +21,79 @@ TRACE_NODE_NAMES = {
     "finalizer",
 }
 
+NODE_TO_AI_NAME = {
+    "music_ops_subgraph": "MusicExecutor",
+    "playback_subgraph": "PlayAgent",
+    "chat_replier": "ChatReplier",
+}
 
-def _extract_trace_content(node_output: object) -> str:
+NON_LLM_TRACE_FIELDS = {
+    "init_memory": ["intent", "status", "summary_version", "executor_reentry", "max_reentry"],
+    "intent_parser": ["intent", "status", "is_ready_to_execute", "missing_slots"],
+    "supervisor_router": ["intent", "status", "route", "executor_reentry", "max_reentry"],
+    "memory_sync": ["status", "should_summarize", "should_update_profile", "should_update_soul"],
+    "finalizer": ["status", "intent"],
+}
+
+
+def _build_non_llm_trace_summary(node_name: str, node_output: dict) -> str:
+    fields = NON_LLM_TRACE_FIELDS.get(node_name, [])
+    if not fields:
+        return ""
+
+    task = node_output.get("task") if isinstance(node_output.get("task"), dict) else {}
+    control = node_output.get("control") if isinstance(node_output.get("control"), dict) else {}
+    memory = node_output.get("memory") if isinstance(node_output.get("memory"), dict) else {}
+
+    values: dict[str, object] = {
+        "intent": task.get("intent"),
+        "status": task.get("status"),
+        "missing_slots": task.get("missing_slots"),
+        "route": control.get("route"),
+        "executor_reentry": control.get("executor_reentry"),
+        "max_reentry": control.get("max_reentry"),
+        "is_ready_to_execute": control.get("is_ready_to_execute"),
+        "should_summarize": control.get("should_summarize"),
+        "should_update_profile": control.get("should_update_profile"),
+        "should_update_soul": control.get("should_update_soul"),
+        "summary_version": memory.get("summary_version"),
+    }
+
+    picked = {k: values.get(k) for k in fields if values.get(k) not in (None, "", [])}
+    if not picked:
+        return ""
+
+    return json.dumps(picked, ensure_ascii=False)
+
+
+def _extract_trace_content(node_name: str, node_output: object) -> str:
     if not isinstance(node_output, dict):
         return ""
 
-    messages = node_output.get("messages", [])
-    if isinstance(messages, list) and messages:
-        for msg in reversed(messages):
-            if isinstance(msg, AIMessage):
-                text = str(msg.content or "").strip()
-                if text:
-                    return text
-            elif isinstance(msg, dict) and str(msg.get("type", "")).strip() == "ai":
-                text = str(msg.get("content", "") or "").strip()
-                if text:
-                    return text
+    expected_ai_name = NODE_TO_AI_NAME.get(node_name)
 
+    # 仅在“应当产出 AIMessage 的节点”中提取 AI 文本，避免读取到上一轮残留消息。
+    if expected_ai_name:
+        messages = node_output.get("messages", [])
+        if isinstance(messages, list) and messages:
+            for msg in reversed(messages):
+                if isinstance(msg, AIMessage):
+                    msg_name = str(getattr(msg, "name", "") or "").strip()
+                    text = str(msg.content or "").strip()
+                    if msg_name == expected_ai_name and text:
+                        return text
+                elif isinstance(msg, dict) and str(msg.get("type", "")).strip() == "ai":
+                    msg_name = str(msg.get("name", "") or "").strip()
+                    text = str(msg.get("content", "") or "").strip()
+                    if msg_name == expected_ai_name and text:
+                        return text
+
+    # 非 LLM 节点或未命中预期 AIMessage 时，优先输出结构化摘要。
+    summary = _build_non_llm_trace_summary(node_name, node_output)
+    if summary:
+        return summary
+
+    # 最后回退到错误原因。
     task = node_output.get("task")
     if isinstance(task, dict):
         reason = str(task.get("error_reason", "") or "").strip()
@@ -45,7 +101,6 @@ def _extract_trace_content(node_output: object) -> str:
             return reason
 
     return ""
-
 
 def _looks_like_json(text: str) -> bool:
     raw = (text or "").strip()
@@ -184,7 +239,7 @@ async def local_chat(req: LocalChatRequest):
             if node_name not in TRACE_NODE_NAMES:
                 continue
 
-            content = _extract_trace_content(node_output)
+            content = _extract_trace_content(node_name, node_output)
             if not content:
                 continue
 

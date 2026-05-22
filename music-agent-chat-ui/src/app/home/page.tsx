@@ -126,14 +126,14 @@ export default function HomePage() {
 
         <div className="mt-6 grid gap-4 md:grid-cols-2">
           <button
-            onClick={() => router.push("/local-chat")}
+            onClick={() => router.push("/chat/local")}
             className="rounded-2xl border border-neutral-700 bg-neutral-800 p-5 text-left transition hover:bg-neutral-700"
           >
             <div className="text-lg font-semibold">本地聊天</div>
             <div className="mt-2 text-sm text-neutral-400">已接入 FastAPI 本地聊天，无需启动 langgraph dev。</div>
           </button>
           <button
-            onClick={() => router.push("/chat")}
+            onClick={() => router.push("/chat/online")}
             className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 p-5 text-left transition hover:bg-emerald-500/20"
           >
             <div className="text-lg font-semibold text-emerald-300">在线聊天</div>
