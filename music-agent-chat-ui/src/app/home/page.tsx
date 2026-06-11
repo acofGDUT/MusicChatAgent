@@ -84,7 +84,7 @@ export default function HomePage() {
         <div className="flex items-start justify-between gap-4 mb-6">
           <div>
             <h1 className="text-2xl font-semibold mb-2">欢迎回来</h1>
-            <p className="text-sm text-neutral-400">已登录成功，请选择聊天模式。</p>
+            <p className="text-sm text-neutral-400">已登录成功，可以开始使用音乐助手。</p>
           </div>
           <button
             onClick={logout}
@@ -124,20 +124,13 @@ export default function HomePage() {
           </div>
         )}
 
-        <div className="mt-6 grid gap-4 md:grid-cols-2">
+        <div className="mt-6">
           <button
             onClick={() => router.push("/chat/local")}
-            className="rounded-2xl border border-neutral-700 bg-neutral-800 p-5 text-left transition hover:bg-neutral-700"
+            className="w-full rounded-2xl border border-emerald-500/40 bg-emerald-500/10 p-5 text-left transition hover:bg-emerald-500/20"
           >
-            <div className="text-lg font-semibold">本地聊天</div>
-            <div className="mt-2 text-sm text-neutral-400">已接入 FastAPI 本地聊天，无需启动 langgraph dev。</div>
-          </button>
-          <button
-            onClick={() => router.push("/chat/online")}
-            className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 p-5 text-left transition hover:bg-emerald-500/20"
-          >
-            <div className="text-lg font-semibold text-emerald-300">在线聊天</div>
-            <div className="mt-2 text-sm text-neutral-400">进入当前已接入的在线聊天界面。</div>
+            <div className="text-lg font-semibold text-emerald-300">进入音乐助手</div>
+            <div className="mt-2 text-sm text-neutral-400">通过 FastAPI 连接本地 Agent 服务。</div>
           </button>
         </div>
       </div>

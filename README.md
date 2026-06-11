@@ -2,7 +2,7 @@
 
 一个面向“体验与测试”的本地可运行项目：
 - 后端：FastAPI + LangChain Agent（音乐检索/推荐相关能力）
-- 前端：Next.js 聊天界面（支持在线聊天与本地聊天入口）
+- 前端：Next.js 聊天界面（通过 FastAPI 连接本地 Agent）
 
 本 README 主要面向**使用者/测试同学**，帮助你快速完成「前后端都本地启动」并开始体验。
 
@@ -119,14 +119,11 @@ npm run dev
 在 `music-agent-chat-ui/` 下创建 `.env`（可参考 `.env.example`），至少确认以下配置：
 
 ```bash
-NEXT_PUBLIC_API_URL=http://localhost:8000
-NEXT_PUBLIC_ASSISTANT_ID=agent
-NEXT_PUBLIC_AUTH_SCHEME=
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 ```
 
 > 说明：
-> - `NEXT_PUBLIC_API_URL`：本地后端地址
-> - `NEXT_PUBLIC_ASSISTANT_ID`：当前助手/图 ID（通常可先用 `agent`）
+> - `NEXT_PUBLIC_API_BASE_URL`：FastAPI 后端地址
 > - 修改 `.env` 后需重启前端服务
 
 ---
@@ -147,7 +144,7 @@ NEXT_PUBLIC_AUTH_SCHEME=
 
 优先检查：
 - 后端是否已启动（`python main.py`）
-- `NEXT_PUBLIC_API_URL` 是否正确指向 `http://localhost:8000`
+- `NEXT_PUBLIC_API_BASE_URL` 是否正确指向 `http://127.0.0.1:8000`
 - 前端是否重启过（修改 `.env` 后必须重启）
 
 ### 8.2 跨域问题（CORS）
