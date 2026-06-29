@@ -1,3 +1,5 @@
+import type { ChatArtifact } from "./artifacts";
+
 export type TraceItem = {
   node: string;
   content: string;
@@ -9,6 +11,7 @@ export type ChatMsg = {
   content: string;
   ts: number;
   trace?: TraceItem[];
+  artifacts?: ChatArtifact[];
 };
 
 export type LocalChatResp = {
@@ -17,6 +20,8 @@ export type LocalChatResp = {
     thread_id?: string;
     reply?: string;
     trace?: TraceItem[];
+    run?: { status?: string };
+    artifacts?: ChatArtifact[];
   };
   message?: string;
 };

@@ -113,7 +113,7 @@ export function useLocalChatSession() {
       if (result.threadId) setThreadId(result.threadId);
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: result.reply, ts: Date.now(), trace: result.trace },
+        { role: "assistant", content: result.reply, ts: Date.now(), trace: result.trace, artifacts: result.artifacts },
       ]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "发送失败";

@@ -1,10 +1,10 @@
 # app/tools/play_tools.py (或者你存放 tool 的对应文件)
-import json
-
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
+from app.models.chat_artifacts import PlayMusicArtifact
 from app.services.music import song_service
+
 
 class PlayMusicInput(BaseModel):
     song_mid: str = Field(description="必须提供：歌曲的唯一标识符 (mid)。通过搜索工具获取。")
@@ -28,16 +28,14 @@ async def play_music_tool(song_mid: str, song_name: str, singer_name: str = "") 
 
         cover_url = await song_service.get_song_cover(song_mid=song_mid, size=300)
 
-        payload = {
-            "type": "play_music",
-            "song_mid": song_mid,
-            "title": song_name,
-            "artist": singer_name,
-            "url": playable_url,
-            "cover": cover_url or "",
-            "description": "已获取播放链接",
-        }
-        return json.dumps(payload, ensure_ascii=False)
+        artifact = PlayMusicArtifact(
+            song_mid=song_mid,
+            title=song_name,
+            artist=singer_name,
+            url=playable_url,
+            cover=cover_url or "",
+        )
+        return artifact.model_dump_json()
 
     except Exception as e:
         return f"❌ 获取播放链接时发生系统报错：{str(e)}。请告知用户系统开小差了，暂时无法播放。"

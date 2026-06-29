@@ -22,6 +22,7 @@ from .utils import (
     append_jsonl,
     build_runtime_messages,
     collect_tool_calls,
+    extract_agent_delta_messages,
     ensure_memory_files,
     estimate_tokens,
     extract_last_ai_message,
@@ -137,10 +138,11 @@ def supervisor_router_node(state: MusicGraphStateV31) -> MusicGraphStateV31:
 
 
 async def music_ops_subgraph_node(state: MusicGraphStateV31) -> MusicGraphStateV31:
-    result = await music_executor.ainvoke({"messages": build_runtime_messages(state, role="executor")})
-    ai_msg = extract_last_ai_message(result, fallback_name="MusicExecutor")
+    runtime_messages = build_runtime_messages(state, role="executor")
+    result = await music_executor.ainvoke({"messages": runtime_messages})
+    delta_messages = extract_agent_delta_messages(result, runtime_messages, fallback_name="MusicExecutor")
+    ai_msg = extract_last_ai_message({"messages": delta_messages}, fallback_name="MusicExecutor")
 
-    messages = extract_messages(state)
     task = dict(state.get("task", {}))
     control = dict(state.get("control", {}))
 
@@ -151,14 +153,15 @@ async def music_ops_subgraph_node(state: MusicGraphStateV31) -> MusicGraphStateV
         task["error_reason"] = content[:300]
 
     control["executor_reentry"] = int(control.get("executor_reentry", 0)) + 1
-    return {**state, "messages": [*messages, ai_msg], "task": task, "control": control}
+    return {**state, "messages": delta_messages, "task": task, "control": control}
 
 
 async def playback_subgraph_node(state: MusicGraphStateV31) -> MusicGraphStateV31:
-    result = await playback_executor.ainvoke({"messages": build_runtime_messages(state, role="playback")})
-    ai_msg = extract_last_ai_message(result, fallback_name="PlayAgent")
+    runtime_messages = build_runtime_messages(state, role="playback")
+    result = await playback_executor.ainvoke({"messages": runtime_messages})
+    delta_messages = extract_agent_delta_messages(result, runtime_messages, fallback_name="PlayAgent")
+    ai_msg = extract_last_ai_message({"messages": delta_messages}, fallback_name="PlayAgent")
 
-    messages = extract_messages(state)
     task = dict(state.get("task", {}))
 
     content = str(ai_msg.content)
@@ -168,7 +171,7 @@ async def playback_subgraph_node(state: MusicGraphStateV31) -> MusicGraphStateV3
     else:
         task["status"] = "done"
 
-    return {**state, "messages": [*messages, ai_msg], "task": task}
+    return {**state, "messages": delta_messages, "task": task}
 
 
 def memory_sync_node(state: MusicGraphStateV31) -> MusicGraphStateV31:
@@ -242,7 +245,6 @@ def memory_sync_node(state: MusicGraphStateV31) -> MusicGraphStateV31:
 
 async def chat_replier_node(state: MusicGraphStateV31) -> MusicGraphStateV31:
     task = state.get("task", {})
-    messages = extract_messages(state)
 
     guidance = SystemMessage(
         content=(
@@ -252,12 +254,13 @@ async def chat_replier_node(state: MusicGraphStateV31) -> MusicGraphStateV31:
             f"ERROR={task.get('error_reason', '')}"
         )
     )
-    result = await chat_replier.ainvoke({"messages": [guidance, *build_runtime_messages(state, role="replier")]})
-    ai_msg = extract_last_ai_message(result, fallback_name="ChatReplier")
+    runtime_messages = [guidance, *build_runtime_messages(state, role="replier")]
+    result = await chat_replier.ainvoke({"messages": runtime_messages})
+    delta_messages = extract_agent_delta_messages(result, runtime_messages, fallback_name="ChatReplier")
 
     control = dict(state.get("control", {}))
     control["executor_reentry"] = 0
-    return {**state, "messages": [*messages, ai_msg], "control": control}
+    return {**state, "messages": delta_messages, "control": control}
 
 
 def finalizer_node(state: MusicGraphStateV31) -> MusicGraphStateV31:

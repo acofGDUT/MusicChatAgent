@@ -3,6 +3,7 @@ import { useArtifact } from "../artifact";
 
 export type PlayMusicPayload = {
   type: "play_music";
+  song_mid?: string;
   url: string;
   title?: string;
   artist?: string;

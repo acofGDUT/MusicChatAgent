@@ -2,38 +2,48 @@
 
 import { MusicPlayerArtifact } from "@/components/local-chat/messages/music_player_artifact";
 import { PlaylistBrowserArtifact } from "@/components/local-chat/messages/playlist_browser_artifact";
-import { ChatMsg } from "@/features/chat-local/types";
-import {
-  findPlayMusicPayloadFromMessage,
-  findPlaylistPayloadFromMessage,
-  isPurePlayMusicPayloadText,
-  isPurePlaylistBrowserPayloadText,
-  tryFormatJson,
-} from "@/features/chat-local/utils";
+import { isPlayMusicArtifact, isPlaylistBrowserArtifact } from "@/features/chat-local/artifacts";
+import type { ChatArtifact } from "@/features/chat-local/artifacts";
+import type { ChatMsg } from "@/features/chat-local/types";
+import { selectRenderableArtifacts, tryFormatJson } from "@/features/chat-local/utils";
 
 type Props = {
   message: ChatMsg;
 };
 
-export function AssistantMessageRenderer({ message: m }: Props) {
-  const playlistPayload = findPlaylistPayloadFromMessage(m);
-  if (playlistPayload) {
-    const pureArtifact = isPurePlaylistBrowserPayloadText(m.content);
+function renderArtifact(artifact: ChatArtifact, index: number) {
+  if (isPlaylistBrowserArtifact(artifact)) {
     return (
-      <div className="space-y-2">
-        {!pureArtifact ? <div className="whitespace-pre-wrap">{m.content}</div> : null}
-        <PlaylistBrowserArtifact payload={playlistPayload} />
+      <div key={`${artifact.type}-${artifact.dirid ?? "unknown"}-${artifact.page}-${index}`}>
+        <PlaylistBrowserArtifact payload={artifact} />
       </div>
     );
   }
 
-  const playPayload = findPlayMusicPayloadFromMessage(m);
-  if (playPayload) {
-    const pureArtifact = isPurePlayMusicPayloadText(m.content);
+  if (isPlayMusicArtifact(artifact)) {
+    return (
+      <div key={`${artifact.type}-${artifact.song_mid}-${index}`}>
+        <MusicPlayerArtifact payload={artifact} />
+      </div>
+    );
+  }
+
+  return null;
+}
+
+export function AssistantMessageRenderer({ message: m }: Props) {
+  const artifactSelection = selectRenderableArtifacts({
+    content: m.content,
+    artifacts: m.artifacts,
+  });
+
+  if (artifactSelection.artifacts.length > 0) {
     return (
       <div className="space-y-2">
-        {!pureArtifact ? <div className="whitespace-pre-wrap">{m.content}</div> : null}
-        <MusicPlayerArtifact payload={playPayload} />
+        {!artifactSelection.isPureArtifactText && m.content.trim().length > 0 ? (
+          <div className="whitespace-pre-wrap">{m.content}</div>
+        ) : null}
+        {artifactSelection.artifacts.map(renderArtifact)}
       </div>
     );
   }

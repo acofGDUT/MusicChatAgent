@@ -1,13 +1,19 @@
-from http.client import HTTPException
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agents.music_team_v3_1 import graph
+from app.agents.music_team_v3_1.artifacts import ArtifactCollector
+from app.core.auth import check_or_refresh_credential, clear_credential, qr_login_manager
+from app.services.music import playlist_service
+from app.services.music.song_service import song_service
+from app.services.music.user_service import user_service
 
 
 TRACE_NODE_NAMES = {
@@ -102,6 +108,7 @@ def _extract_trace_content(node_name: str, node_output: object) -> str:
 
     return ""
 
+
 def _looks_like_json(text: str) -> bool:
     raw = (text or "").strip()
     if not raw:
@@ -125,12 +132,9 @@ def _looks_like_json(text: str) -> bool:
             continue
 
     return False
-from app.core.auth import check_or_refresh_credential, clear_credential, qr_login_manager
-from app.services.music import playlist_service
-from app.services.music.song_service import song_service
-from app.services.music.user_service import user_service
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class LocalChatRequest(BaseModel):
@@ -213,48 +217,93 @@ async def local_chat_history(thread_id: str = Query("local-web-thread"), limit: 
     return {"status": "success", "data": {"thread_id": clean_thread_id, "messages": messages[-limit:]}}
 
 
+def _error_run_response(
+    status_code: int,
+    message: str,
+    *,
+    thread_id: str | None = None,
+    code: str = "agent_error",
+) -> JSONResponse:
+    data: dict[str, object] = {
+        "run": {
+            "status": "failed",
+            "error": {
+                "code": code,
+                "message": message,
+            },
+        },
+        "artifacts": [],
+    }
+    if thread_id:
+        data["thread_id"] = thread_id
+
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": "error",
+            "message": message,
+            "data": data,
+        },
+    )
+
+
 @router.post("/chat/local")
 async def local_chat(req: LocalChatRequest):
     user_text = (req.message or "").strip()
     if not user_text:
-        return {"status": "error", "message": "message 不能为空"}
+        return _error_run_response(400, "message 不能为空", code="invalid_request")
 
     thread_id = (req.thread_id or "local-default-thread").strip() or "local-default-thread"
 
     trace: list[dict[str, object]] = []
     latest_messages: list[object] = []
+    collector = ArtifactCollector()
 
-    async for event in graph.astream(
-        {
-            "thread_id": thread_id,
-            "messages": [HumanMessage(content=user_text)],
-        },
-        config={"configurable": {"thread_id": thread_id}},
-        stream_mode="updates",
-    ):
-        if not isinstance(event, dict):
-            continue
-
-        for node_name, node_output in event.items():
-            if node_name not in TRACE_NODE_NAMES:
+    try:
+        async for event in graph.astream(
+            {
+                "thread_id": thread_id,
+                "messages": [HumanMessage(content=user_text)],
+            },
+            config={"configurable": {"thread_id": thread_id}},
+            stream_mode="updates",
+        ):
+            if not isinstance(event, dict):
                 continue
 
-            content = _extract_trace_content(node_name, node_output)
-            if not content:
-                continue
+            for node_name, node_output in event.items():
+                if node_name not in TRACE_NODE_NAMES:
+                    continue
 
-            trace.append(
-                {
-                    "node": node_name,
-                    "content": content,
-                    "is_json_like": _looks_like_json(content),
-                }
-            )
+                if isinstance(node_output, dict):
+                    maybe_messages = node_output.get("messages", [])
+                    if isinstance(maybe_messages, list) and maybe_messages:
+                        collector.collect_from_messages(maybe_messages)
+                        latest_messages = maybe_messages
 
-            if isinstance(node_output, dict):
-                maybe_messages = node_output.get("messages", [])
-                if isinstance(maybe_messages, list) and maybe_messages:
-                    latest_messages = maybe_messages
+                content = _extract_trace_content(node_name, node_output)
+                if not content:
+                    continue
+
+                trace.append(
+                    {
+                        "node": node_name,
+                        "content": content,
+                        "is_json_like": _looks_like_json(content),
+                    }
+                )
+
+    except Exception as exc:
+        logger.exception("Local chat agent call failed | thread_id=%s | error_type=%s", thread_id, type(exc).__name__)
+        return _error_run_response(
+            502,
+            f"Agent 服务调用失败：{type(exc).__name__}",
+            thread_id=thread_id,
+            code="agent_upstream_error",
+        )
+
+    # Scan the final delta once more for backward-compatible JSON-in-text replies.
+    collector.collect_from_messages(latest_messages)
 
     messages = latest_messages
     ai_text = ""
@@ -269,6 +318,8 @@ async def local_chat(req: LocalChatRequest):
             "thread_id": thread_id,
             "reply": ai_text,
             "trace": trace,
+            "run": {"status": "succeeded"},
+            "artifacts": collector.to_list(),
         },
     }
 

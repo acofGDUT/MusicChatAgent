@@ -1,5 +1,7 @@
 import { API_BASE, API_PREFIX, HIDDEN_TRACE_NODES } from "@/features/chat-local/constants";
-import { ChatMsg, LocalChatResp, LocalHistoryResp } from "@/features/chat-local/types";
+import { parseArtifacts } from "@/features/chat-local/artifacts";
+import type { ChatArtifact } from "@/features/chat-local/artifacts";
+import type { ChatMsg, LocalChatResp, LocalHistoryResp } from "@/features/chat-local/types";
 
 export async function verifyAuthStatus(): Promise<boolean> {
   const resp = await fetch(`${API_BASE}${API_PREFIX}/auth/status`, { cache: "no-store" });
@@ -35,7 +37,7 @@ export async function fetchLocalChatHistory(threadId: string): Promise<ChatMsg[]
 export async function sendLocalChatMessage(params: {
   message: string;
   threadId: string;
-}): Promise<{ threadId?: string; reply: string; trace: NonNullable<ChatMsg["trace"]> }> {
+}): Promise<{ threadId?: string; reply: string; trace: NonNullable<ChatMsg["trace"]>; artifacts: ChatArtifact[] }> {
   const resp = await fetch(`${API_BASE}${API_PREFIX}/chat/local`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -52,10 +54,12 @@ export async function sendLocalChatMessage(params: {
   const trace = Array.isArray(data.data?.trace)
     ? data.data.trace.filter((t) => t && !HIDDEN_TRACE_NODES.has((t.node || "").trim()))
     : [];
+  const artifacts = parseArtifacts(data.data?.artifacts);
 
   return {
     threadId: nextThreadId,
     reply,
     trace,
+    artifacts,
   };
 }

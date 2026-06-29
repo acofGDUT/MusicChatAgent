@@ -6,6 +6,7 @@ from langchain_openai import ChatOpenAI
 MODEL_NAME = os.getenv("MUSIC_AGENT_MODEL", "glm-4.5-air")
 MUSIC_MODEL_BASE_URL = os.getenv("MUSIC_AGENT_BASE_URL", "https://open.bigmodel.cn/api/paas/v4/")
 MUSIC_MODEL_API_KEY = os.getenv("MUSIC_AGENT_API_KEY", "")
+SECONDARY_MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 MODEL_BASE_URL = os.getenv("OPENAI_API_BASE", "")
 MODEL_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
@@ -22,7 +23,7 @@ HISTORY_PATH = MEMORY_DIR / "history.jsonl"
 
 llm0 = ChatOpenAI(
     temperature=0,
-    model="gpt-4o-mini",
+    model=SECONDARY_MODEL_NAME,
     openai_api_key=MODEL_API_KEY,
     openai_api_base=MODEL_BASE_URL,
 )
