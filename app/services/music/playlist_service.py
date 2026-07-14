@@ -76,6 +76,7 @@ class PlaylistService:
                 singer_names = " & ".join(filter(None, singers))
 
                 cleaned_song = {
+                    "id": song.id,
                     "mid": song.mid,
                     "title": song.title or song.name,
                     "singer": singer_names,
@@ -94,13 +95,20 @@ class PlaylistService:
                 "songlist": []
             }
 
-    async def get_all_songs_in_playlist(self, songlist_id: int, dirid: int = 0) -> list[dict[str, Any]]:
+    async def get_all_songs_in_playlist(self, songlist_id: int = 0, dirid: int = 0) -> list[dict[str, Any]]:
         """
         获取一个歌单里的所有歌曲（自动分页）。
+
+        ``songlist_id`` 和 ``dirid`` 任传其一即可；个人创建的歌单可以只使用
+        ``dirid`` 查询，用于写操作结果的只读后置验证。
         """
+        if not songlist_id and not dirid:
+            logger.warning("⚠️ 调用获取歌单全量歌曲失败：必须提供 songlist_id 或 dirid")
+            return []
+
         try:
             async with await create_client() as client:
-                songs = await client.songlist.get_detail.all_pages_items(
+                request = client.songlist.get_detail(
                     songlist_id=songlist_id,
                     dirid=dirid,
                     num=100,
@@ -108,6 +116,9 @@ class PlaylistService:
                     tag=False,
                     userinfo=False,
                 )
+                songs = []
+                async for detail in request.paginate():
+                    songs.extend(detail.songs)
             return [
                 {
                     "id": song.id,
@@ -117,7 +128,10 @@ class PlaylistService:
                 for song in songs
             ]
         except Exception as e:
-            logger.error(f"❌ 获取歌单全量歌曲失败 (ID: {songlist_id}): {e}")
+            logger.error(
+                f"❌ 获取歌单全量歌曲失败 "
+                f"(songlist_id: {songlist_id}, dirid: {dirid}): {e}"
+            )
             return []
 
     # ================= 写入类操作 (需登录态) =================

@@ -1,9 +1,14 @@
-import json
+import logging
+
 from langchain.tools import tool
 from pydantic import BaseModel, Field
 
 from app.services.music import search_service
+from app.tools.tool_result import ToolResult, ToolResultCode
 from qqmusic_api.modules.search import SearchType
+
+logger = logging.getLogger(__name__)
+
 
 # ================= 1. 定义工具的输入结构 (给大模型戴上紧箍咒) =================
 
@@ -39,22 +44,36 @@ async def search_music_tool(keyword: str, search_type: str = "SONG", num: int = 
     """
     【核心搜索工具】全能搜索引擎，可以根据用户意图搜索网络上的歌曲、歌手、专辑、歌单、歌词等。
     """
+    clean_keyword = (keyword or "").strip()
+    clean_search_type = (search_type or "").strip().upper()
+    type_map = {
+        "SONG": SearchType.SONG,
+        "SINGER": SearchType.SINGER,
+        "ALBUM": SearchType.ALBUM,
+        "SONGLIST": SearchType.SONGLIST,
+        "LYRIC": SearchType.LYRIC,
+        "USER": SearchType.USER,
+    }
+
+    if not clean_keyword:
+        return ToolResult.failure(
+            code=ToolResultCode.INVALID_ARGUMENT,
+            message="搜索关键词不能为空",
+            data={"field": "keyword"},
+        ).to_json()
+    if clean_search_type not in type_map:
+        return ToolResult.failure(
+            code=ToolResultCode.INVALID_ARGUMENT,
+            message=f"不支持的搜索类型：{clean_search_type or '空'}",
+            data={"field": "search_type", "supported": list(type_map)},
+        ).to_json()
+
     try:
-        # 1. 将大模型传入的字符串映射为真正的 Enum 对象
-        type_map = {
-            "SONG": SearchType.SONG,
-            "SINGER": SearchType.SINGER,
-            "ALBUM": SearchType.ALBUM,
-            "SONGLIST": SearchType.SONGLIST,
-            "LYRIC": SearchType.LYRIC,
-            "USER": SearchType.USER
-        }
-        # 如果大模型瞎传，默认 fallback 到 SONG
-        actual_enum_type = type_map.get(search_type.upper(), SearchType.SONG)
+        actual_enum_type = type_map[clean_search_type]
 
         # 2. 调用 Service 层洗数据方法
         res = await search_service.search_by_type(
-            keyword=keyword,
+            keyword=clean_keyword,
             search_type=actual_enum_type,
             num=num,
             highlight=False
@@ -62,25 +81,44 @@ async def search_music_tool(keyword: str, search_type: str = "SONG", num: int = 
 
         # 3. 错误处理
         if res.get("status") == "error":
-            return f"搜索失败：{res.get('message')}"
+            return ToolResult.failure(
+                code=ToolResultCode.UPSTREAM_ERROR,
+                message="音乐搜索服务暂时不可用",
+                data={"keyword": clean_keyword, "search_type": clean_search_type},
+                retryable=True,
+            ).to_json()
 
         # 4. 拿到清洗好的纯净数据
         cleaned_results = res.get("data", [])
 
         if not cleaned_results:
-             return f"未能在类型为 '{search_type}' 的分类下搜索到关于 '{keyword}' 的内容，请尝试更换搜索类型或关键词。"
+            return ToolResult.failure(
+                code=ToolResultCode.NOT_FOUND,
+                message=f"没有找到与“{clean_keyword}”相关的结果",
+                data={"keyword": clean_keyword, "search_type": clean_search_type, "count": 0, "items": []},
+            ).to_json()
 
         # 5. 为了方便大模型在多轮对话中引用（比如：“播放第2首”），动态加上 index 序号
         for idx, item in enumerate(cleaned_results):
             item["index"] = idx + 1
 
-        # 6. 转为格式化的 JSON 字符串给大模型阅读
-        return json.dumps(cleaned_results, ensure_ascii=False, indent=2)
+        return ToolResult.success(
+            message=f"搜索完成，共返回 {len(cleaned_results)} 条结果",
+            data={
+                "keyword": clean_keyword,
+                "search_type": clean_search_type,
+                "count": len(cleaned_results),
+                "items": cleaned_results,
+            },
+        ).to_json()
 
-    except Exception as e:
-        import traceback
-        print(traceback.format_exc())
-        return f"工具执行时发生内部错误：{str(e)}"
+    except Exception:
+        logger.exception("search_music_tool 执行异常")
+        return ToolResult.failure(
+            code=ToolResultCode.INTERNAL_ERROR,
+            message="搜索工具执行时发生内部错误",
+            data={"keyword": clean_keyword, "search_type": clean_search_type},
+        ).to_json()
 
 
 @tool("get_hotkeys_tool", args_schema=GetHotkeysInput)

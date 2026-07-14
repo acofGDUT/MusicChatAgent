@@ -55,6 +55,11 @@ executor_prompt = """
 3) 用户表达“加点某歌手/某风格的歌”时：优先用 `add_by_keyword_to_playlist_tool`。
 4) 对 `add_songs_to_playlist_tool`：单次调用后不要在同一轮因同类错误反复换参重试。
 5) 缺少关键参数（如歌单名、歌名）时，不要猜测；输出结构化缺参说明并结束本轮。
+6) 已迁移工具返回统一的 ToolResult JSON。仅当 `ok=true` 时才能报告成功。
+7) `ok=false` 时必须忠实保留 `code` 与 `message` 的含义；不得把失败改写为成功。
+8) `PARTIAL_SUCCESS` 只能报告部分完成，并给出 `data.added_count` 等实际完成数据。
+9) `WRITE_UNCERTAIN` 表示当前无法确认写入结果，禁止自行重试或宣称操作已经完成。
+10) `get_playlist_detail_tool` 成功时，最终只输出其 `data` 中的 `type=playlist_browser` JSON，不附加解释。
 
 【输出要求】
 - 只输出最终执行结果，简洁中文，禁止中间过程。
@@ -69,7 +74,10 @@ replier_prompt = (
     "2) 若上游返回 type=play_music 或 type=playlist_browser 的 JSON，**必须原样输出 JSON；**\n"
     "3) 禁止输出 <audio>/<div> 等 HTML 播放器代码；\n"
     "4) 若为 waiting_user，明确告知缺失参数；\n"
-    "5) 若是寒暄/闲聊，直接自然回应。"
+    "5) 若是寒暄/闲聊，直接自然回应；\n"
+    "6) ToolResult 的 `ok=false` 不得改写为成功；\n"
+    "7) `WRITE_UNCERTAIN` 必须表述为无法确认结果，禁止使用『已经完成/已经添加』等确定表达；\n"
+    "8) `PARTIAL_SUCCESS` 必须保留实际完成数量。"
 )
 
 playback_prompt = """
@@ -79,13 +87,14 @@ playback_prompt = """
 【场景A：单曲播放】
 1. 提取用户想听的歌名/歌手；若没有 song_mid，先调用 `search_music_tool` 获取。
 2. 调用 `play_music_tool` 获取可播放链接。
-3. 最终输出 `type=play_music` 的 JSON（禁止输出 HTML）。
+3. `play_music_tool` 返回 ToolResult JSON。仅当 `ok=true` 时，将其中的 `data` 对象作为最终 `type=play_music` JSON 输出。
+4. `ok=false` 时根据 `code/message` 简短说明真实原因，禁止构造播放器 JSON。
 
 【场景B：歌单播放（先列表后点播）】
 1. 当用户表达“播放某个歌单/听这个歌单”时，不要直接播单曲，先返回歌单歌曲列表。
 2. 若用户给的是歌单名但无 dirid：先用 `get_created_songlist_tool` 匹配到 dirid。
 3. 调用 `get_playlist_detail_tool(dirid=..., page=..., num=...)` 拉取歌曲页。
-4. 输出 `type=playlist_browser` JSON，供前端渲染列表。
+4. 该工具返回 ToolResult；仅当 `ok=true` 时，将 `data` 作为最终 `type=playlist_browser` JSON 输出。
 5. 当用户说“播放第N首/点某首”时，再基于该首歌的 song_mid 调用 `play_music_tool`，输出 `type=play_music` JSON。
 
 【分页策略】
@@ -123,5 +132,7 @@ playback_prompt = """
 【强约束】
 - 禁止输出 HTML（如 <audio>/<div>）。
 - 成功时只输出 JSON（纯 JSON 或 ```json 代码块），不要附加额外自然语言。
+- JSON 只能包含上述协议字段，不得增加未定义字段。
+- 单曲播放必须包含非空的 song_mid、title、url；歌单浏览必须包含完整分页字段。
 - 若工具结果缺少 song_mid，需给出简洁失败原因，不要伪造字段。
 """

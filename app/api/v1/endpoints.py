@@ -1,13 +1,13 @@
-from http.client import HTTPException
 import json
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agents.music_team_v3_1 import graph
+from app.schemas import PlayMusicArtifact, PlaylistBrowserArtifact
 
 
 TRACE_NODE_NAMES = {
@@ -16,6 +16,7 @@ TRACE_NODE_NAMES = {
     "supervisor_router",
     "music_ops_subgraph",
     "playback_subgraph",
+    "result_verifier",
     "memory_sync",
     "chat_replier",
     "finalizer",
@@ -31,6 +32,13 @@ NON_LLM_TRACE_FIELDS = {
     "init_memory": ["intent", "status", "summary_version", "executor_reentry", "max_reentry"],
     "intent_parser": ["intent", "status", "is_ready_to_execute", "missing_slots"],
     "supervisor_router": ["intent", "status", "route", "executor_reentry", "max_reentry"],
+    "result_verifier": [
+        "verification_status",
+        "verification_code",
+        "retry_scheduled",
+        "retry_count",
+        "verifier_route",
+    ],
     "memory_sync": ["status", "should_summarize", "should_update_profile", "should_update_soul"],
     "finalizer": ["status", "intent"],
 }
@@ -44,6 +52,8 @@ def _build_non_llm_trace_summary(node_name: str, node_output: dict) -> str:
     task = node_output.get("task") if isinstance(node_output.get("task"), dict) else {}
     control = node_output.get("control") if isinstance(node_output.get("control"), dict) else {}
     memory = node_output.get("memory") if isinstance(node_output.get("memory"), dict) else {}
+    extensions = node_output.get("extensions") if isinstance(node_output.get("extensions"), dict) else {}
+    verification = extensions.get("verification") if isinstance(extensions.get("verification"), dict) else {}
 
     values: dict[str, object] = {
         "intent": task.get("intent"),
@@ -57,6 +67,11 @@ def _build_non_llm_trace_summary(node_name: str, node_output: dict) -> str:
         "should_update_profile": control.get("should_update_profile"),
         "should_update_soul": control.get("should_update_soul"),
         "summary_version": memory.get("summary_version"),
+        "verification_status": verification.get("status"),
+        "verification_code": verification.get("code"),
+        "retry_scheduled": verification.get("retry_scheduled"),
+        "retry_count": verification.get("retry_count", control.get("retry_count")),
+        "verifier_route": control.get("verifier_route"),
     }
 
     picked = {k: values.get(k) for k in fields if values.get(k) not in (None, "", [])}
@@ -528,13 +543,16 @@ async def tool_user_fav_songlist(page: int = 1, num: int = 20):
 # ===============================
 
 
-@router.get("/playlist/{dirid}/tracks")
+@router.get("/playlist/{dirid}/tracks", response_model=PlaylistBrowserArtifact)
 async def get_playlist_browser_page(
     dirid: int,
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=50),
     playlist_name: str = Query("", description="可选：前端已知歌单名"),
 ):
+    if dirid <= 0:
+        raise HTTPException(status_code=400, detail="dirid 必须大于 0")
+
     res = await playlist_service.get_playlist_detail(
         dirid=dirid,
         page=page,
@@ -568,20 +586,20 @@ async def get_playlist_browser_page(
 
     has_more = page * page_size < total_song_num
 
-    return {
-        "type": "playlist_browser",
-        "playlist_name": resolved_name,
-        "dirid": dirid,
-        "page": page,
-        "page_size": page_size,
-        "total_song_num": total_song_num,
-        "has_more": has_more,
-        "tracks": tracks,
-        "description": f"已加载第 {page} 页，可点击歌曲直接播放",
-    }
+    return PlaylistBrowserArtifact(
+        type="playlist_browser",
+        playlist_name=str(resolved_name).strip() or f"歌单(dirid={dirid})",
+        dirid=dirid,
+        page=page,
+        page_size=page_size,
+        total_song_num=max(total_song_num, len(tracks)),
+        has_more=has_more,
+        tracks=tracks,
+        description=f"已加载第 {page} 页，可点击歌曲直接播放",
+    )
 
 
-@router.get("/song/play-url")
+@router.get("/song/play-url", response_model=PlayMusicArtifact)
 async def get_play_url_by_song_mid(
     song_mid: str = Query(..., description="歌曲 mid"),
     title: str = Query("", description="可选：歌曲标题"),
@@ -598,12 +616,12 @@ async def get_play_url_by_song_mid(
 
     cover_url = await song_service.get_song_cover(song_mid=clean_mid, size=300)
 
-    return {
-        "type": "play_music",
-        "song_mid": clean_mid,
-        "title": title,
-        "artist": artist,
-        "url": playable_url,
-        "cover": cover_url or "",
-        "description": "已获取播放链接",
-    }
+    return PlayMusicArtifact(
+        type="play_music",
+        song_mid=clean_mid,
+        title=(title or "").strip() or "未知歌曲",
+        artist=(artist or "").strip(),
+        url=playable_url,
+        cover=cover_url or "",
+        description="已获取播放链接",
+    )
