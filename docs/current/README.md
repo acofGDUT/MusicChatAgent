@@ -20,15 +20,11 @@
 3. [ROADMAP.md](ROADMAP.md) - 仍需完成的优化工作和优先级。
 4. [DEVNOTES.md](DEVNOTES.md) - 开发时仍需注意的限制、风险和取舍。
 
-## 当前设计工作
+## 已实现规格
 
-- [上下文优先级、记忆治理与工作流体验优化设计](../superpowers/specs/2026-06-11-context-memory-workflow-design.md)
-- [上下文、记忆与工作流优化实施计划](../superpowers/plans/2026-06-11-context-memory-workflow-plan.md)
-- [确定性动作与结构化 Artifact 优化规格](../SDD/spec/deterministic-action-and-artifact-spec.md)
-- [确定性动作与结构化 Artifact 实施计划](../SDD/plan/deterministic-action-and-artifact-plan.md)
+- [Phase 1：ToolResult 统一工具结果协议](../../reference/spec/01-tool-result-spec.md)
+- [Phase 2：Result Verifier、安全重试与 Artifact](../../reference/spec/02-result-verifier-retry-artifact-state-spec.md)
+- [Phase 3：SQLite、用户隔离、偏好与历史恢复](../../reference/spec/03-sqlite-user-memory-history-spec.md)
 
-## 历史参考文档
-
-根目录中的 `music_team_v3_1_framework.md`、`项目文档.md`、`项目跟进文档.md`、`project_review.md` 和
-`music_team_v3_1_refactor_design.md` 仍有参考价值，但不是当前状态的权威来源。若这些文档与代码或本目录冲突，
-以当前代码检查和本目录为准。
+仓库已移除旧 Agent 版本、失效启动入口和历史框架文档。当前实现以
+`app/agents/music_team_v3_1/`、本目录以及上述三个 Spec 为准。

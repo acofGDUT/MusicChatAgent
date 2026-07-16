@@ -20,10 +20,3 @@ music-agent-chat-ui/node_modules/
 
 # ignore local UI worktree/submodule directory
 agent-chat-ui/
-
-# ignore legacy/non-v3.1 agent versions
-app/agents/music_team_v2.py
-app/agents/music_team_v2_1.py
-app/agents/music_team_v2_2.py
-app/agents/music_team_v3.py
-app/agents/music_team_graph.py

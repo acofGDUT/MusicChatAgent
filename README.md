@@ -1,19 +1,31 @@
 # MusicChatAgent
 
-一个面向“体验与测试”的本地可运行项目：
-- 后端：FastAPI + LangChain Agent（音乐检索/推荐相关能力）
-- 前端：Next.js 聊天界面（通过 FastAPI 连接本地 Agent）
+一个面向 QQ 音乐场景的本地多 Agent 助手，也是用于展示 Agent 工程化能力的全栈项目：
 
-本 README 主要面向**使用者/测试同学**，帮助你快速完成「前后端都本地启动」并开始体验。
+- 后端：FastAPI + LangChain + LangGraph
+- 前端：Next.js 15 本地聊天界面
+- 状态：SQLite checkpoint、用户隔离、结构化偏好与历史恢复
+- 可靠性：ToolResult 协议、确定性 Result Verifier、一次安全重试、Pydantic Artifact
+
+项目只维护 `/chat/local` 主链路，不依赖在线 LangGraph 服务。
 
 ---
 
-## 1. 你将获得什么
+## 1. 核心能力
 
-启动后你可以：
-- 在浏览器中打开聊天界面，体验音乐助手能力
-- 通过前端页面发起请求，由本地后端处理
-- 进行基础联调验证（前端请求 → 后端响应）
+启动后可以：
+
+- 搜索、播放和浏览 QQ 音乐歌曲与歌单
+- 创建歌单、按关键词加歌并返回可验证的执行结果
+- 在服务重启后恢复同一用户、同一线程的对话状态
+- 保存用户明确表达的结构化音乐偏好
+- 在前端渲染经过后端 Schema 校验的播放器和歌单 Artifact
+
+三个核心工程阶段：
+
+1. ToolResult：统一工具成功、失败、部分成功和写入不确定协议。
+2. Result Verifier：确定性验证、副作用安全边界和最多一次只读重试。
+3. SQLite Memory：checkpoint 持久化、用户/线程隔离、偏好与完整历史恢复。
 
 ---
 
@@ -28,12 +40,17 @@
 
 ---
 
-## 3. 项目结构（测试视角）
+## 3. 项目结构
 
-- `main.py`：后端入口（FastAPI）
-- `requirements.txt`：后端依赖
-- `app/`：后端业务与接口代码
-- `music-agent-chat-ui/`：前端 Next.js 工程
+- `main.py`：FastAPI 入口和 SQLite 生命周期
+- `app/agents/music_team_v3_1/`：当前唯一 Agent Graph 实现
+- `app/tools/`：工具协议与 QQ 音乐 Tool 适配层
+- `app/services/`：QQ 音乐和用户偏好 Service
+- `app/schemas/`：Artifact 与 Preference Schema
+- `music-agent-chat-ui/`：Next.js 15 本地聊天前端
+- `tests/`：完全离线的协议、节点、API、持久化和 Service 测试
+- `reference/spec/`：三个已实现阶段的设计规格
+- `docs/current/`：当前架构、进展、限制与路线图
 
 ---
 
@@ -194,7 +211,7 @@ pip install -r requirements.txt
 
 ---
 
-## 9. 给测试同学的建议
+## 9. 调试建议
 
 - 建议保留两个终端窗口：
   - 终端 A：后端日志
@@ -205,7 +222,7 @@ pip install -r requirements.txt
   - 浏览器控制台报错
   - 后端终端报错
 
-这样开发同学可以更快定位问题。
+这些信息可以帮助快速定位前后端或外部服务问题。
 
 ---
 
@@ -226,4 +243,6 @@ pip install -r requirements.txt
 ## 11. 相关说明
 
 - 前端原始模板与更完整 UI 说明见：`music-agent-chat-ui/README.md`
-- 本 README 目标是“本地联调与体验优先”，不覆盖完整生产部署流程
+- 当前架构说明见：`docs/current/ARCHITECTURE.md`
+- 三个已实现阶段的设计规格见：`reference/spec/`
+- 本项目定位为本地单机演示，不覆盖完整生产部署、多实例和数据库加密

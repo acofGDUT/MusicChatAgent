@@ -204,7 +204,7 @@ def build_graph(*, checkpointer=None, preference_repository=DISABLED_PREFERENCES
 - 不在多个文件重复构建节点和边。
 - `app/agents/music_team_v3_1/__init__.py` 同时导出 `graph` 和 `build_graph`。
 - 新增显式无状态 `DisabledPreferenceRepository`：只返回空偏好，`storage_backend=disabled`，不访问数据库，也不调用偏好提取 LLM。
-- 可以保留一个无本地 SQLite 生命周期的 `graph = build_graph()` 供 `langgraph.json`/Studio 导入；它使用 disabled repository，可读取应用级只读 `soul.md`，但不得访问 `user_profile.md` 或 `history.jsonl`。
+- 保留一个无本地 SQLite 生命周期的 `graph = build_graph()` 供测试和开发时直接导入；它使用 disabled repository，可读取应用级只读 `soul.md`，但不得访问已移除的全局 profile/history 文件。
 - FastAPI 本地聊天端点不得使用该无持久化 fallback，必须使用 `app.state.music_graph`。
 - 最终 FastAPI 构建 graph 时必须显式传入 checkpointer 和 `SQLitePreferenceRepository`；不得依赖默认 disabled repository。
 
