@@ -46,7 +46,10 @@ export function useLocalChatSession() {
       try {
         const raw = window.localStorage.getItem(LS_KEY);
         if (raw) {
-          const parsed = JSON.parse(raw) as { threadId?: string; messages?: ChatMsg[] };
+          const parsed = JSON.parse(raw) as {
+            threadId?: string;
+            messages?: ChatMsg[];
+          };
           if (parsed.threadId?.trim()) {
             nextThreadId = parsed.threadId.trim();
             setThreadId(nextThreadId);
@@ -57,7 +60,7 @@ export function useLocalChatSession() {
                 m &&
                 (m.role === "user" || m.role === "assistant") &&
                 typeof m.content === "string" &&
-                typeof m.ts === "number"
+                typeof m.ts === "number",
             );
           }
         }
@@ -77,8 +80,8 @@ export function useLocalChatSession() {
         if (remoteMessages.length > 0) {
           setMessages(remoteMessages);
         }
-      } catch {
-        // ignore history fetch errors
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "历史记录加载失败");
       } finally {
         setLoadingHistory(false);
         hasHydratedRef.current = true;
@@ -91,13 +94,19 @@ export function useLocalChatSession() {
   useEffect(() => {
     if (!hasHydratedRef.current) return;
     try {
-      window.localStorage.setItem(LS_KEY, JSON.stringify({ threadId, messages }));
+      window.localStorage.setItem(
+        LS_KEY,
+        JSON.stringify({ threadId, messages }),
+      );
     } catch {
       // ignore write errors
     }
   }, [threadId, messages]);
 
-  const canSend = useMemo(() => input.trim().length > 0 && !sending, [input, sending]);
+  const canSend = useMemo(
+    () => input.trim().length > 0 && !sending,
+    [input, sending],
+  );
 
   const sendMessage = async () => {
     const text = input.trim();
@@ -106,19 +115,31 @@ export function useLocalChatSession() {
     setError("");
     setSending(true);
     setInput("");
-    setMessages((prev) => [...prev, { role: "user", content: text, ts: Date.now() }]);
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", content: text, ts: Date.now() },
+    ]);
 
     try {
       const result = await sendLocalChatMessage({ message: text, threadId });
       if (result.threadId) setThreadId(result.threadId);
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: result.reply, ts: Date.now(), trace: result.trace, artifacts: result.artifacts },
+        {
+          role: "assistant",
+          content: result.reply,
+          ts: Date.now(),
+          trace: result.trace,
+          artifacts: result.artifacts,
+        },
       ]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "发送失败";
       setError(msg);
-      setMessages((prev) => [...prev, { role: "assistant", content: `请求失败：${msg}`, ts: Date.now() }]);
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: `请求失败：${msg}`, ts: Date.now() },
+      ]);
     } finally {
       setSending(false);
     }
@@ -127,7 +148,10 @@ export function useLocalChatSession() {
   const resetChat = () => {
     const nextThreadId = `local-web-thread-${Date.now()}`;
     try {
-      window.localStorage.setItem(LS_KEY, JSON.stringify({ threadId: nextThreadId, messages: [] }));
+      window.localStorage.setItem(
+        LS_KEY,
+        JSON.stringify({ threadId: nextThreadId, messages: [] }),
+      );
     } catch {
       // ignore write errors
     }

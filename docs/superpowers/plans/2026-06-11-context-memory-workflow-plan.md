@@ -2,7 +2,7 @@
 
 > Parent spec: [上下文优先级、记忆治理与工作流体验优化设计](../specs/2026-06-11-context-memory-workflow-design.md)
 >
-> Status: Proposed
+> Status: Partially implemented; remaining work tracked in docs/current/ROADMAP.md
 >
 > Date: 2026-06-11
 
@@ -127,6 +127,12 @@ pnpm test
 - 每个 phase 独立提交和验收，出现指令遵循率或工具成功率回归时停止进入下一 phase。
 
 ## Completion Definition
+
+### 2026-07-16 integration checkpoint
+
+The architecture branch now includes the completed ToolResult contract, result verifier with one safe retry, structured artifact state, SQLite checkpoint persistence, authenticated identity isolation, user preferences, and local chat history. Backend and frontend verification evidence is recorded in `docs/current/PROGRESS.md`.
+
+This broader plan is intentionally not marked complete: CurrentRequest/ContextEnvelope compilation, cancellation semantics, explicit preference management UI, production auth/storage hardening, and live external-service E2E remain open in `docs/current/ROADMAP.md`.
 
 - 七个 task 的 Acceptance 均有实际证据。
 - 设计规格的验收标准逐项有测试、指标或人工验收记录。

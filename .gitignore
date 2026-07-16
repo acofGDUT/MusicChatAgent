@@ -1,9 +1,13 @@
 .env
+.venv/
 __pycache__/
 *.pyc
 .idea/
 data/credential.json
 data/cookie.txt
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
 
 # runtime/cache artifacts
 *.pckl
@@ -23,5 +27,3 @@ app/agents/music_team_v2_1.py
 app/agents/music_team_v2_2.py
 app/agents/music_team_v3.py
 app/agents/music_team_graph.py
-
-tests/

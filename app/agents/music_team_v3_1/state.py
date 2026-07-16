@@ -7,6 +7,12 @@ from pydantic import BaseModel, Field
 TaskStatus = Literal["pending", "running", "waiting_user", "done", "failed"]
 IntentType = Literal["smalltalk", "music_ops", "playback"]
 RouteType = Literal["chat_replier", "music_ops_subgraph", "playback_subgraph"]
+VerifierRoute = Literal[
+    "retry_music_ops",
+    "retry_playback",
+    "music_done",
+    "playback_done",
+]
 
 
 class IntentParserDecision(BaseModel):
@@ -42,27 +48,33 @@ class TaskMeta(TypedDict, total=False):
 class MemoryMeta(TypedDict, total=False):
     summary: str
     summary_version: int
-    user_profile_path: str
-    soul_path: str
-    history_path: str
-    user_profile: str
+    summary_message_count: int
+    preferences: dict[str, Any]
+    preference_version: int
+    preference_update_status: Literal["skipped", "unchanged", "updated", "failed"]
+    preference_signal_count: int
+    storage_backend: Literal["sqlite", "disabled"]
+    user_id_present: bool
     soul: str
-    last_profile_update_at: str
-    last_soul_update_at: str
-    last_history_write_at: str
+    last_preference_update_at: str
 
 
 class RuntimeControl(TypedDict, total=False):
     route: RouteType
     executor_reentry: int
     max_reentry: int
+    retry_count: int
+    max_retries: int
+    retry_reason: str
+    retry_tool_name: str
+    retry_artifact_type: str
+    verifier_route: VerifierRoute
     should_summarize: bool
-    should_update_profile: bool
-    should_update_soul: bool
     is_ready_to_execute: bool
 
 
 class MusicGraphStateV31(TypedDict, total=False):
+    user_id: str
     thread_id: str
     messages: Annotated[list[BaseMessage], add_messages]
     task: TaskMeta

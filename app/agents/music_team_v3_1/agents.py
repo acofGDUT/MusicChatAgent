@@ -28,6 +28,16 @@ music_ops_tools = [
     get_playlist_detail_tool,
 ]
 
+# A retry is allowed only for read operations. Keeping a separate tool list makes
+# the no-write guarantee enforceable by code rather than relying on a prompt.
+music_retry_tools = [
+    search_music_tool,
+    get_created_songlist_tool,
+    get_fav_song_tool,
+    get_hotkeys_tool,
+    get_playlist_detail_tool,
+]
+
 playback_tools = [search_music_tool, get_created_songlist_tool, get_playlist_detail_tool, play_music_tool]
 
 
@@ -39,6 +49,13 @@ def build_agent(*, model, tools, system_prompt: str, name: str):
 music_executor = build_agent(
     model=llm1,
     tools=music_ops_tools,
+    system_prompt=executor_prompt,
+    name="MusicExecutor",
+)
+
+music_retry_executor = build_agent(
+    model=llm1,
+    tools=music_retry_tools,
     system_prompt=executor_prompt,
     name="MusicExecutor",
 )

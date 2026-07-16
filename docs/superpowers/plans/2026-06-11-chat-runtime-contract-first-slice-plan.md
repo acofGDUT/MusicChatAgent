@@ -2,7 +2,7 @@
 
 > Parent spec: [本地聊天运行时合同第一执行切片设计](../specs/2026-06-11-chat-runtime-contract-first-slice-design.md)
 >
-> Status: Source updated, pending verification
+> Status: Completed and verified on 2026-07-16
 >
 > Date: 2026-06-11
 
@@ -380,6 +380,17 @@ pnpm build
 - `docs/current` 只在验证后同步真实状态。
 
 ## Closeout
+
+### 2026-07-16 integration verification
+
+This slice is complete on `codex/architecture-improvements` after integration with the three-phase workflow work. Verification evidence:
+
+- Backend: `237 passed` with no exclusions.
+- Local-chat API artifact/error contracts: covered by backend contract tests, including `ToolResult.data` artifact extraction.
+- Frontend: Playwright local API contract `3 passed`; TypeScript, Prettier, lint, and production build completed successfully.
+- The project remains local-chat-only; `/chat/online` redirects to `/chat/local` and the online provider/runtime was not restored.
+
+Live LLM/QQ Music browser E2E remains an external-environment follow-up and is tracked in `docs/current/ROADMAP.md`; it is not treated as an unverified source-code item.
 
 当前状态：源码已更新，等待运行时验证。已接入模型配置、稳定错误响应、后端 artifact 模型与收集器、graph delta message 修复、`/chat/local` 的 `run/artifacts` 响应字段，以及前端结构化 artifact 优先渲染。
 

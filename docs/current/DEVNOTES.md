@@ -1,86 +1,60 @@
 # 开发注意事项
 
-本文档记录当前改造项目时仍然重要的风险和约束。只有在实现和验证证明风险已经消除后，才能删除或标记为 resolved。
+本文档记录 2026-07-16 集成后仍然有效的风险和约束。
+
+## 已解决的旧风险
+
+- Agent 节点和 Verifier 已只返回 message delta；完整后端测试覆盖 reducer、ToolMessage 和多轮行为。
+- `memory_sync` 不再原地删除或裁剪 checkpoint messages。
+- 全局可写 `user_profile.md` 和 `history.jsonl` 已退出在线权威路径。
+- soul 只作为只读策略输入，普通请求不再运行时改写。
+- music、playback 和 smalltalk 都会经过 memory sync/finalizer。
+- 工具成功/失败不再依赖中文关键词，核心工具使用结构化 ToolResult。
+- history 从 SQLite checkpoint 恢复完整可见消息，不再从 preview 重建。
+- `OPENAI_MODEL` 不再硬编码，DeepSeek/OpenAI 兼容供应商可以通过环境变量配置。
 
 ## 当前风险
 
-### Message reducer 风险（部分已解决）
+### 最新请求优先级仍缺少独立状态合同
 
-`MusicGraphStateV31.messages` 使用 LangGraph `add_messages`。
-`music_ops_subgraph_node`、`playback_subgraph_node`、`chat_replier_node` 已改为只返回 agent 本轮产生的 delta messages，而不是返回完整历史消息列表。
-delta 可以包含 `ToolMessage` 和最终 `AIMessage`，这样播放工具返回的 JSON 不会在进入 API 前丢失。
-本轮源码更新没有执行测试；需要由后续人工或自动化验证确认 reducer 合并后不重复、不漏消息。
-`memory_sync_node` 仍存在 `state["messages"]` 原地修改，测试已标记 skip，需要在后续改造中解决。
+当前执行输入已经有有界近期消息、摘要和结构化偏好，但尚未实现设计中的 `CurrentRequest`/`ContextEnvelope` 与真实 tokenizer 预算。需要继续用“旧要求 vs 最新纠正”评测保护最新指令。
 
-### 最新请求可能被旧上下文稀释
+### 本地身份不是生产认证
 
-`intent_parser_node` 会把最新用户文本写入 `task.goal`，但 executor 收到的是完整提取消息，加上可选 summary/profile/soul。
-当前还没有显式 `CurrentRequest` 合同，也没有强制优先级机制。
+身份来自当前机器上的单个 QQ Music Credential。它能隔离 checkpoint key 和偏好，但不提供 Session/JWT、多账号切换、Credential 加密或权限管理。不要把当前 API 直接暴露到不受信网络。
 
-### Profile 注入是截断，不是检索
+### SQLite 只面向单进程本地运行
 
-`build_runtime_messages()` injects `user_profile[:2200]`. If profile grows, relevant facts near the end may be lost while irrelevant facts near the top remain.
-如果 profile 继续增长，靠后的相关事实可能丢失，而靠前的不相关事实仍会保留。
-profile 更新是整篇文档级 LLM 重写，目前缺少字段级校验。
+数据库开启 WAL、busy timeout 和事务锁，但没有多实例分布式锁、备份恢复、字段加密或在线迁移系统。SQLite 文件和 Credential 文件都不得提交，也不应放在共享目录。
 
-### Soul 应是稳定策略，不应是运行时记忆
+### 偏好抽取仍依赖 LLM
 
-运行时 soul autotune 默认关闭，但代码路径仍存在于 `MUSIC_AGENT_ENABLE_SOUL_AUTOTUNE` 之后。
-在经过 review 的迁移移除运行时写入前，应把 soul 当作版本化产品策略。
+严格 schema、版本和事务可以防止非法状态落库，但无法保证模型语义判断永远正确。当前只在显式偏好线索出现时抽取，并采用 fail-soft；后续仍需要用户查看、纠错和失效入口。
 
-### 已检查文件中的记忆作用域是全局的
+### Artifact 仍保留旧文本兼容解析
 
-`app/agents/memory/user_profile.md`、`soul.md` 和 `history.jsonl` 是共享路径。已检查代码中没有看到 profile 或 soul 的用户/account 命名空间。
+新响应使用 `data.artifacts`，但为了旧历史兼容，后端 collector 和前端 renderer 仍可解析合法 JSON 文本。新功能不得重新依赖文本解析；待历史迁移窗口结束后再删除 fallback。
 
-### History 不是权威聊天存储
+### Run 合同仍是第一阶段
 
-`/chat/local/history` 从 `history.jsonl` 的预览内容重建消息。这些预览适合展示和调试，但不能可靠恢复完整消息或结构化 Artifact。
+当前公开 `run` 只有 succeeded/failed 与稳定错误码，还没有 run_id、公开阶段事件、取消、幂等键或流式恢复。副作用工具的未知结果已经禁止自动重试，但完整取消语义仍待设计。
 
-### Graph 分支生命周期不对称
+### API 模块仍然过宽
 
-只有 `music_ops_subgraph` 会经过 `memory_sync`。Playback 直接进入 finalizer，smalltalk 会经过 `chat_replier` 但不经过 memory sync。
-任何记忆或运行状态改造都必须覆盖所有分支。
+`app/api/v1/endpoints.py` 同时承载聊天、认证、用户、歌曲、歌单和播放器直连接口。后续拆分必须保留路由路径、响应模型、lifespan 注入和测试 monkeypatch 边界。
 
-### 失败检测部分依赖文本
+### 外部服务 E2E 尚未执行
 
-`music_ops_subgraph_node` 会在最终文本包含中文失败关键词时标记失败。在依赖它保障副作用安全前，应替换为结构化 outcome 和工具/异常映射。
+237 个后端测试和前端构建使用 fake graph/service 验证内部合同，没有证明真实 QQ Music API、账号权限、播放 URL 或当前外部模型服务始终可用。面试演示前应执行一次受控真实 E2E。
 
-### API 模块过宽
+### 前端 lint 存在既有 warnings
 
-`app/api/v1/endpoints.py` 同时包含聊天、认证、音乐、工具辅助和前端播放器直连接口。新增 schema 和响应契约时，优先在保持兼容 import 的前提下按 route group 拆分。
-
-### `HTTPException` 导入已修复，仍需回归播放器错误路径
-
-`app/api/v1/endpoints.py` 已改为从 FastAPI 导入 `HTTPException`。
-播放器直连接口 `GET /song/play-url`、`GET /playlist/{dirid}/tracks` 的错误路径仍需要在人工验收或自动化测试中覆盖。
-
-### 前端当前只有一个活跃聊天模式
-
-`/chat/online` 会重定向到 `/chat/local`。在重新引入在线流式能力前，文档和 UI 标签不应声称有两个活跃模式。
-
-### 前端 Artifact 渲染已接入结构化 artifacts
-
-后端在 `data.artifacts` 中返回结构化 Artifact 数组，前端 `AssistantMessageRenderer` 优先从 `msg.artifacts` 渲染。
-文本解析仅保留给没有 artifacts 的旧历史消息。
-`artifacts.ts` 定义共享 `ChatArtifact` 类型和类型守卫。
-`selectRenderableArtifacts()` 负责做结构化优先、legacy JSON 兼容和避免同一条回复重复渲染。
-
-### 本轮 artifact 链路源码已更新但未运行验证
-
-本轮源码已经把 `play_music_tool -> ToolMessage -> graph delta -> /chat/local data.artifacts -> frontend renderer` 串起来。
-用户要求先不由 Codex 跑测试，因此当前文档只能标记为源码已更新，不能写成运行时已验证。
-
-### 测试覆盖已改善但仍偏薄
-
-此前已有后端测试覆盖 graph state、message delta、artifacts、API 契约、LLM init 等方向。
-本轮源码更新没有执行这些测试；测试结果不应沿用为本轮改动的通过证据。
-`tests/test_search_service.py` 是预存测试。
-后续优化需要继续补充行为测试，尤其是 memory sync、agent 重试、工具失败路径。
+Next lint 为 0 error，但仍有 hook dependency 和 fast-refresh warnings；`next lint` 本身也已提示弃用。当前不阻塞构建，后续应迁移 ESLint CLI 并逐项处理。
 
 ## 工作约定
 
-- 修改高风险行为前，先增加失败测试或可复现评测样例。
+- 修改 ToolResult、Verifier、身份、记忆和副作用安全前先增加失败测试。
 - UI 确定性动作继续留在 LLM 路径之外。
-- 记忆写入的风险高于记忆读取。
-- 不把真实凭证、原始私密历史、生成的构建产物或记忆备份写入 Git。
-- 只有在验证实现后才更新 `docs/current/`；单纯计划阶段不要把内容写成当前事实。
+- 记忆写入风险高于读取；无法确认时宁可不写。
+- 不返回或记录 API key、Credential、完整私密历史、system prompt 或思维链。
+- 只有真实运行过的测试、构建或 E2E 才能进入 `PROGRESS.md`。

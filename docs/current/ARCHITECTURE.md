@@ -1,43 +1,44 @@
 # 当前架构
 
-> 最后核对时间：2026-06-11。核对方式为阅读仓库文件和本轮源码 diff。本次更新没有启动运行时服务，没有执行 `pytest`、前端构建或浏览器 E2E；运行结果等待人工验证。
+> 最后核对时间：2026-07-16。本文只描述当前集成分支中已经实现并通过自动化验证的机制。
 
 ## 系统形态
 
-MusicChatAgent 是一个 QQ 音乐助手项目，后端使用 Python/FastAPI，前端位于 `music-agent-chat-ui/`，使用 Next.js。
+MusicChatAgent 是本地单账号 QQ 音乐助手：
 
-- 后端入口：`main.py` 创建 FastAPI 应用，允许 `http://localhost:3000` 跨域，并把 `app.api.v1.endpoints.router` 挂载到 `/api/v1`。
-- 当前包内活跃 Graph：`app.agents.music_team_v3_1:graph`。
-- 当前前端聊天页面：`music-agent-chat-ui/src/app/chat/local/page.tsx`。
-- `/chat/online` 当前重定向到 `/chat/local`；从已检查代码看，它不是正在工作的 LangGraph SDK 流式 UI。
+- 后端：FastAPI、LangChain、LangGraph。
+- 前端：`music-agent-chat-ui/` 中的 Next.js 15 应用。
+- 活跃聊天入口：`/chat/local`。
+- `/chat/online` 只重定向到 `/chat/local`；LangGraph SDK online chat、Stream/Thread providers 和代理 API 已移除。
+- 点击播放、歌单翻页等确定性 UI 动作继续直接调用 FastAPI，不经过 LLM。
 
-## 后端 API
+## 启动与持久化生命周期
 
-`app/api/v1/endpoints.py` 当前把聊天、认证、用户、歌曲、歌单、工具辅助接口和前端播放器直连接口放在同一个模块中。
+`main.py` 在导入 LangGraph 前加载 `.env`，并强制要求 `LANGGRAPH_STRICT_MSGPACK=true`。
 
-重要聊天接口：
+FastAPI lifespan：
 
-- `POST /api/v1/chat/local`
-  - 接收 `{ message, thread_id? }`。
-  - 使用 `HumanMessage` 和可配置 `thread_id` 调用 `graph.astream(..., stream_mode="updates")`。
-  - 通过检查已知节点输出来构造调试用 `trace`。
-  - 在消费 graph `updates` 时扫描每个已知节点输出的 `messages`，通过 `ArtifactCollector` 收集结构化 `artifacts`；最终 delta 会再扫描一次用于旧 JSON 文本兼容。
-  - 成功响应：`{ status: "success", data: { thread_id, reply, trace, run: { status: "succeeded" }, artifacts: [...] } }`。
-  - 错误响应（空消息/Graph 异常）：`{ status: "error", message, data: { thread_id?, run: { status: "failed", error }, artifacts: [] } }`。
-  - 空消息返回 400，Graph 异常返回 502。错误不泄露 traceback 或 secret。
-- `GET /api/v1/chat/local/history`
-  - 读取 `app/agents/memory/history.jsonl`。
-  - 从每条事件的 `message_tail` 预览中重建展示消息。
-  - 这是基于预览的恢复路径，不是完整、权威的聊天消息存储。
+1. 打开 `AsyncSqliteSaver` checkpoint 连接。
+2. 打开独立的 `aiosqlite` 偏好仓库连接。
+3. 对 SQLite 设置 WAL、`busy_timeout=5000` 和 foreign keys。
+4. 注入 checkpointer 与 `SQLitePreferenceRepository` 后编译 Graph。
+5. 服务关闭时清除 `app.state` 引用，再按所有权顺序关闭连接。
 
-前端播放器直连接口：
+数据库路径由 `MUSIC_AGENT_STATE_DB` 配置；相对路径始终相对仓库根目录解析，默认是 `data/music_agent.sqlite3`。后端没有静默回退到内存 checkpointer。
 
-- `GET /api/v1/playlist/{dirid}/tracks` 返回 `playlist_browser` payload，用于确定性的 UI 歌单分页。
-- `GET /api/v1/song/play-url` 按 `song_mid` 返回 `play_music` payload，用于确定性播放。
+## 身份与会话隔离
 
-## 当前 LangGraph 流程
+本地聊天身份只从当前 QQ Music Credential 的 `musicid`/`str_musicid` 派生。客户端请求只允许提供 `message` 和可选 `thread_id`，不能提交 `user_id`。
 
-编译后的 Graph 定义在 `app/agents/music_team_v3_1/graph.py`，当前 checkpointer 使用 `InMemorySaver`。
+Graph checkpoint key 使用长度前缀拼接后的 SHA-256：
+
+```text
+music:sha256(user_id, thread_id)
+```
+
+API 响应继续返回原始 `thread_id`，但数据库 key 不暴露 QQ 用户标识。当前实现适合本地单账号演示，不是 Session/JWT、多账号 Credential 管理或生产级认证系统。
+
+## LangGraph 流程
 
 ```mermaid
 flowchart TD
@@ -46,111 +47,80 @@ flowchart TD
     intent_parser --> supervisor_router
     supervisor_router -->|music_ops| music_ops_subgraph
     supervisor_router -->|playback| playback_subgraph
-    supervisor_router -->|smalltalk/not ready| chat_replier
-    music_ops_subgraph --> memory_sync
-    memory_sync --> chat_replier
-    playback_subgraph --> finalizer
-    chat_replier --> finalizer
+    supervisor_router -->|smalltalk/error| chat_replier
+    music_ops_subgraph --> result_verifier
+    playback_subgraph --> result_verifier
+    result_verifier -->|safe read retry, at most once| music_ops_subgraph
+    result_verifier -->|safe playback retry, at most once| playback_subgraph
+    result_verifier -->|music done| chat_replier
+    result_verifier -->|playback done| memory_sync
+    chat_replier --> memory_sync
+    memory_sync --> finalizer
     finalizer --> END
 ```
 
-当前不对称点：
+所有自然语言分支最终都会经过 `memory_sync` 和 `finalizer`。
 
-- `music_ops_subgraph` 会经过 `memory_sync`，再到 `chat_replier`。
-- `playback_subgraph` 会直接进入 `finalizer`。
-- 闲聊和解析失败路径会进入 `chat_replier`，再到 `finalizer`，绕过 `memory_sync`。
+`messages` 使用 `add_messages` reducer。Agent 节点只返回本轮 delta，并保留工具调用产生的 `ToolMessage`；Verifier 只返回新增或被替换的消息，不返回完整历史。
 
-## Agent
+## ToolResult、验证与 Artifact
 
-`app/agents/music_team_v3_1/agents.py` 在模块导入时构造三个 LangChain agent：
+核心工具返回统一 `ToolResult` JSON：
 
-- `MusicExecutor`：调用工具的 QQ 音乐账户操作 agent，负责搜索、创建歌单、加歌、删歌、查询歌单详情等。
-- `PlayAgent`：调用工具的播放 agent，负责播放和歌单浏览。
-- `ChatReplier`：不调用工具的回复 agent，用于改写或整理最终回复。
+- `ok/code/message/data/retryable` 表达确定性结果。
+- 副作用结果未知时使用 `WRITE_UNCERTAIN`，不自动重试。
+- 只有查询类、明确标记 retryable、且当前 attempt 没有写工具时，Verifier 才允许最多一次重试。
+- 播放和歌单 payload 使用严格 Pydantic schema；未知类型、非法 URL、缺少分页字段或重复 track 被拒绝。
 
-主音乐模型由 `MUSIC_AGENT_MODEL`、`MUSIC_AGENT_BASE_URL` 和 `MUSIC_AGENT_API_KEY` 配置。
-次级模型由 `OPENAI_MODEL`、`OPENAI_API_BASE` 和 `OPENAI_API_KEY` 配置。
+`ArtifactCollector` 可以从 delta AI/Tool messages、ToolResult 的 `data` 和迁移期旧 JSON 文本中收集 Artifact。`app.schemas` 是规范实现，`app.models.chat_artifacts` 只是兼容导出层。
 
-## 状态模型
-
-`MusicGraphStateV31` 当前包含：
-
-- `thread_id`
-- 使用 LangGraph `add_messages` reducer 的 `messages`
-- `task`：包含 intent、status、extracted/missing slots、retries 和 error 字段
-- `memory`：包含 summary/profile/soul 路径和已加载文本
-- `control`：包含 route、重入限制、summary/profile/soul 标志和 ready 状态
-- `extensions`：保留给未来扩展的任意数据
-
-当前重要行为：
-
-- `intent_parser_node` 会把最新用户文本写入 `task.goal`。
-- `build_runtime_messages()` 仍会把完整提取出的 messages 传给 executor/replier。
-- 对非 parser 角色，`build_runtime_messages()` 会在存在时前置 summary、`user_profile` 前 2200 个字符，以及 `soul` 前 2200 个字符。
-- `music_ops_subgraph_node`、`playback_subgraph_node`、`chat_replier_node` 当前返回 agent 本轮产生的 delta messages，而不是旧历史消息列表。
-  delta 中可以包含 `ToolMessage` 和最终 `AIMessage`，用于保证 `play_music_tool -> ToolMessage -> API artifacts` 路径不丢数据。
-  `add_messages` reducer 负责把这些 delta 合并回 state。
-`memory_sync_node` 仍存在 `state["messages"]` 原地修改风险，已记录在 DEVNOTES 中。
+只有带服务端 `user_visible=true` 元数据的 `ChatReplier` 或终态 `PlayAgent` 消息能成为用户回复或历史消息。客户端或内部 Agent 伪造的同名字段不会绕过节点清洗。
 
 ## 记忆
 
-记忆文件位于 `app/agents/memory/`：
+当前记忆分层：
 
-- `user_profile.md`：共享 Markdown 用户画像。
-- `soul.md`：共享 Markdown 策略/人格文档。
-- `history.jsonl`：追加写入的事件日志，用于预览和类似 trace 的历史展示。
+- 工作记忆与完整消息：SQLite LangGraph checkpoint，按用户和线程隔离。
+- 会话摘要：保存在 checkpoint state；只对尚未摘要的消息增量更新，失败时保留旧摘要和完整消息。
+- 长期偏好：SQLite 结构化 bucket，区分歌手、流派、语言、场景等 liked/disliked 项；使用严格 schema、版本号、事务和并发锁合并。
+- `soul.md`：只读产品策略输入，不在普通聊天中自动改写。
 
-当前记忆生命周期：
+旧的共享 `user_profile.md` 和 `history.jsonl` 不再是在线写入或权威历史来源。偏好提取只有在当前用户文本出现明确偏好线索时才调用辅助模型；提取或存储失败只降级为不更新，不改变音乐操作结果。
 
-1. `init_memory_node` 确保记忆文件存在，并把 profile/soul 读入 state。
-2. `memory_sync_node` 通过累加消息内容长度估算 token 压力，而不是使用模型 tokenizer。
-3. 如果估算值达到 `MUSIC_AGENT_SUMMARY_TRIGGER_TOKENS`，默认 `5000`，它会请求次级 LLM 生成摘要，并只保留最新的 `MUSIC_AGENT_SUMMARY_KEEP_MESSAGES` 条消息。
-4. 对 done 或 waiting 任务，它会请求次级 LLM 重写/更新 `user_profile.md`。
-5. 只有 `MUSIC_AGENT_ENABLE_SOUL_AUTOTUNE=true` 时才会发生运行时 soul 更新；默认值是 false。
-6. 它会追加一条 history event，包含工具调用、消息数量和最后三条消息预览。
+## API 合同
 
-当前限制：
+`POST /api/v1/chat/local`：
 
-- profile/soul 文件在线程之间共享，已检查代码中没有看到用户命名空间。
-- profile 通过固定字符前缀注入，不是按相关性检索。
-- summary 当前不是独立持久化存储。
-- 在已检查 Graph 中，playback 和 smalltalk 分支不会经过 `memory_sync`。
+- 使用认证身份和哈希 checkpoint key 执行 Graph。
+- 成功响应保留 `reply/trace`，并返回 `run` 和经过校验的 `artifacts`。
+- 模型或 Graph 异常返回稳定 JSON 与 `agent_upstream_error`，不把 traceback、secret 或私密历史返回前端。
+- SQLite 异常映射为 `503 storage_unavailable`。
+
+`GET /api/v1/chat/local/history`：
+
+- 使用 `graph.aget_state()` 读取权威 checkpoint。
+- 只返回完整 HumanMessage 和受信的可见 AIMessage。
+- 不返回内部 executor、工具消息、摘要或截断 preview。
+- 没有可靠消息时间时，从 snapshot 时间生成稳定、严格递增的展示时间。
 
 ## 前端
 
-当前活跃的本地聊天功能位于 `music-agent-chat-ui/src/features/chat-local/`。
+`features/chat-local/` 是唯一活跃聊天 feature：
 
-- `useLocalChatSession.ts` 检查登录状态，加载 localStorage 或后端预览历史，发送消息，并把消息写回 localStorage。
-- `localChatApi.ts` 调用 `/auth/status`、`/chat/local/history` 和 `/chat/local`。
-- `AssistantMessageRenderer.tsx` 优先从结构化 `data.artifacts` 渲染，旧文本 parser 作为 fallback。
-- `artifacts.ts` 定义共享 `ChatArtifact` 类型和类型守卫。
-- `utils.ts` 中的 `selectRenderableArtifacts()` 负责选择渲染来源：结构化 artifacts 优先，旧文本 JSON 仅在无 artifacts 时兼容，并会把 legacy `play_music` payload 补齐成统一结构。
-- `music_player_artifact.tsx` 和 `playlist_browser_artifact.tsx` 渲染对应的 artifact 组件。
+- service 对所有非 2xx 响应抛出用户可读错误，并兼容 `message`、字符串 `detail` 和 `detail.message`。
+- hook 优先加载 localStorage 缓存；无缓存时从 checkpoint history 恢复。
+- 新响应优先使用 `data.artifacts`，只有旧消息没有结构化 Artifact 时才解析文本 JSON。
+- 播放器与歌单浏览仍使用确定性 REST API。
 
-当前前端契约：
+## 已验证范围
 
-- 后端返回结构化 `data.artifacts` 作为一等字段；`reply` 文本保留兼容。
-- `ChatMsg` 包含可选 `artifacts` 字段。
-- 前端优先消费 `artifacts`，旧文本解析只保留给无 artifact 的历史消息。
-- workflow trace 是调试详情面板，不是稳定的公开运行状态契约。
+2026-07-16 集成验收：
 
-## 验证入口
+- 后端完整测试：237 passed。
+- 前端 service 测试：3 passed。
+- TypeScript `tsc --noEmit`：通过。
+- Prettier chat-local 检查：通过。
+- Next lint：0 error，存在预先已有 warnings。
+- Next production build：通过，生成 11 个静态页面。
 
-项目说明中已有的命令：
-
-```powershell
-pytest
-```
-
-```powershell
-cd music-agent-chat-ui
-pnpm lint
-pnpm format:check
-pnpm build
-```
-
-2026-06-11 本轮源码更新后，只执行了 `git diff --check`，没有执行运行时验证。后续验收应至少覆盖：
-
-- `POST /api/v1/chat/local` 普通聊天、播放请求、后端异常和浏览器 Origin 下的 502 JSON 响应。
-- `play_music_tool` 返回 JSON 经过 `ToolMessage` 后仍能出现在 `data.artifacts`。
-- 前端本地聊天优先渲染结构化 artifacts，旧文本 JSON 仍能兼容。
+尚未完成真实 QQ Music + DeepSeek/OpenAI 兼容服务的浏览器 E2E；自动化测试使用 fake graph/service，不把外部服务可用性写成已验证事实。

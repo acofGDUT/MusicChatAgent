@@ -19,11 +19,15 @@ export function tryFormatJson(text: string): string {
   }
 }
 
-export function findPlaylistPayloadFromMessage(msg: ChatMsg): ReturnType<typeof extractPlaylistBrowserPayload> | null {
+export function findPlaylistPayloadFromMessage(
+  msg: ChatMsg,
+): ReturnType<typeof extractPlaylistBrowserPayload> | null {
   return extractPlaylistBrowserPayload(msg.content);
 }
 
-export function findPlayMusicPayloadFromMessage(msg: ChatMsg): ReturnType<typeof extractPlayMusicPayload> | null {
+export function findPlayMusicPayloadFromMessage(
+  msg: ChatMsg,
+): ReturnType<typeof extractPlayMusicPayload> | null {
   return extractPlayMusicPayload(msg.content);
 }
 

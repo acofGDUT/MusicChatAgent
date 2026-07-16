@@ -13,7 +13,9 @@ export function LocalChatArtifactPanel() {
     return (
       <aside className="w-[360px] shrink-0 rounded-2xl border border-neutral-200 bg-white p-4 text-neutral-500 shadow-sm">
         <h2 className="text-sm font-semibold text-neutral-800">工具面板</h2>
-        <p className="mt-2 text-sm leading-6">当助手返回播放卡片或歌单卡片时，会显示在这里，方便你持续操作。</p>
+        <p className="mt-2 text-sm leading-6">
+          当助手返回播放卡片或歌单卡片时，会显示在这里，方便你持续操作。
+        </p>
       </aside>
     );
   }

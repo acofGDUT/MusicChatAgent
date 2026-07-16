@@ -79,8 +79,11 @@ class ArtifactCollector:
                 index = start + 1
                 continue
 
-            if isinstance(value, dict) and value.get("type"):
-                self.ingest_raw(value)
+            if isinstance(value, dict):
+                # ToolResult envelopes keep the validated artifact in `data`.
+                # Recurse through known container keys instead of requiring the
+                # outer object itself to be an artifact.
+                self._collect_from_content(value)
             index = start + max(end_offset, 1)
 
     def collect_from_message(self, message: Any) -> None:

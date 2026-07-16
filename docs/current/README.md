@@ -4,12 +4,14 @@
 
 ## 当前状态提示
 
-2026-06-11 本轮源码已更新结构化 Artifact 播放链路：
+2026-07-16 已把三个实现 Spec 集成到 architecture 本地聊天主线：
 
-- 后端保留 agent 本轮 delta messages，并从 `ToolMessage`/AI message 中收集 `play_music`、`playlist_browser` artifacts。
-- `/api/v1/chat/local` 返回 `data.run` 和 `data.artifacts`。
-- 前端本地聊天优先渲染结构化 artifacts，旧文本 JSON 仅作为兼容 fallback。
-- 本轮没有由 Codex 执行后端测试、前端构建或浏览器验收；验证状态见 [PROGRESS.md](PROGRESS.md)。
+- 只维护 `/chat/local`；`/chat/online` 重定向到本地聊天。
+- ToolResult、Verifier/安全重试、结构化 Artifact 已合并。
+- SQLite checkpoint、QQ 身份隔离、结构化偏好和权威历史恢复已启用。
+- 完整后端测试、前端 service 测试、类型检查、lint 和 production build 已执行；真实外部服务 E2E 尚未执行。
+
+详细证据见 [PROGRESS.md](PROGRESS.md)。
 
 ## 阅读顺序
 

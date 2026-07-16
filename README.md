@@ -23,7 +23,7 @@
 
 - **Python**：推荐 **3.12.6**（当前项目已按该版本验证）
 - **Node.js**：建议 18+
-- **包管理器**：`npm`（项目中也包含 `pnpm-lock.yaml`，若你使用 pnpm 也可）
+- **包管理器**：pnpm 10.5.1（由 `packageManager` 和 `pnpm-lock.yaml` 固定）
 - **操作系统**：Windows / macOS / Linux 均可
 
 ---
@@ -50,6 +50,22 @@
 ```bash
 pip install -r requirements.txt
 ```
+
+复制并填写后端环境配置：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+以下两项控制本地会话持久化：
+
+```dotenv
+LANGGRAPH_STRICT_MSGPACK=true
+MUSIC_AGENT_STATE_DB=data/music_agent.sqlite3
+```
+
+- `LANGGRAPH_STRICT_MSGPACK` 必须在任何 LangGraph 模块导入前设置；缺失时后端会拒绝启动，避免 checkpoint 使用非严格序列化。
+- `MUSIC_AGENT_STATE_DB` 的相对路径始终相对项目根目录解析，默认数据库为 `data/music_agent.sqlite3`。
 
 启动后端：
 
@@ -98,13 +114,13 @@ cd music-agent-chat-ui
 安装依赖：
 
 ```bash
-npm install
+corepack pnpm@10.5.1 install
 ```
 
 启动开发服务：
 
 ```bash
-npm run dev
+corepack pnpm@10.5.1 run dev
 ```
 
 默认地址：
@@ -116,7 +132,7 @@ npm run dev
 
 前端工程支持通过环境变量直连本地后端。
 
-在 `music-agent-chat-ui/` 下创建 `.env`（可参考 `.env.example`），至少确认以下配置：
+在 `music-agent-chat-ui/` 下创建 `.env.local`（可参考 `.env.example`），至少确认以下配置：
 
 ```bash
 NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
@@ -132,7 +148,7 @@ NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 
 1. 确认后端终端无报错并持续运行
 2. 打开 `http://localhost:3000`
-3. 进入聊天页面（例如 `/chat` 或项目首页入口）
+3. 进入 `/chat/local`（`/chat/online` 仅重定向到本地聊天）
 4. 发送一条简单请求（如“推荐几首周杰伦的歌”）
 5. 观察是否返回有效响应
 
@@ -166,6 +182,15 @@ pip install -r requirements.txt
 - 后端默认 8000
 
 如端口被占用，请关闭占用进程，或修改启动端口并同步更新前端环境变量。
+
+### 8.5 本地会话与偏好数据
+
+- FastAPI 使用 SQLite 保存 LangGraph checkpoint，服务重启后可以按当前 QQ 账号和 `thread_id` 恢复对话状态。
+- 结构化偏好按当前本机 QQ Music Credential 派生的用户标识隔离；客户端不能自行提交 `user_id`。
+- 当前身份绑定只适用于本地单账号/演示环境，不是 Session、JWT 或完整多用户认证系统。
+- SQLite 文件没有加密，不应放置在共享目录，也不适合直接用于生产级多实例部署。
+- 删除 `MUSIC_AGENT_STATE_DB` 指向的 SQLite 文件会同时清除会话 checkpoint 和结构化用户偏好。
+- SQLite、WAL、SHM、Credential 和 Cookie 文件均不应提交到 Git。
 
 ---
 

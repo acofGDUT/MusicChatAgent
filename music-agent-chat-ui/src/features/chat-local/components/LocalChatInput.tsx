@@ -8,7 +8,13 @@ type Props = {
   onSend: () => void;
 };
 
-export function LocalChatInput({ input, sending, canSend, onInputChange, onSend }: Props) {
+export function LocalChatInput({
+  input,
+  sending,
+  canSend,
+  onInputChange,
+  onSend,
+}: Props) {
   return (
     <div className="border-t border-neutral-100 bg-white p-4">
       <div className="flex items-end gap-3">
@@ -23,7 +29,7 @@ export function LocalChatInput({ input, sending, canSend, onInputChange, onSend 
           }}
           placeholder="输入你想问的内容，比如：推荐通勤听的轻快歌单"
           rows={3}
-          className="flex-1 resize-none rounded-xl border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-800 outline-none transition placeholder:text-neutral-400 focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+          className="flex-1 resize-none rounded-xl border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-800 transition outline-none placeholder:text-neutral-400 focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
         />
         <button
           type="button"

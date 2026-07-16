@@ -2,6 +2,52 @@
 
 本文档记录已经完成的工作，以及支撑这些结论的证据。计划中的工作应写在 [ROADMAP.md](ROADMAP.md)。
 
+## 2026-07-16：architecture 本地聊天主线与三个 Spec 完成集成
+
+状态：实现与离线自动化验收完成；真实 QQ Music + 外部 LLM 浏览器 E2E 尚未执行。
+
+集成边界：
+
+- 以 `codex/architecture-improvements` 为基线，保留单一 `/chat/local` 模式；`/chat/online` 继续重定向，不恢复已删除的 LangGraph SDK providers 和代理 API。
+- 合入 ToolResult、Result Verifier/一次安全重试/Artifact 状态，以及 SQLite checkpoint/身份隔离/结构化偏好/权威历史三个 Spec。
+- Artifact 统一由 `app.schemas` 严格校验，`app.models.chat_artifacts` 保留为兼容导出层。
+- Agent 和 Verifier 遵守 message delta 合同，同时保留 ToolMessage 供 Artifact 收集。
+- `OPENAI_MODEL` 与 `MUSIC_AGENT_MODEL` 均从环境变量读取。
+
+关键结果：
+
+- FastAPI lifespan 管理 SQLite checkpointer 与偏好仓库的两个独立连接。
+- QQ Credential 派生服务端身份，checkpoint key 不暴露 QQ 标识，客户端不能提交 `user_id`。
+- 历史恢复改为读取 checkpoint 完整消息，并过滤内部 Agent/Tool 消息。
+- ToolResult 驱动成功/失败判断；副作用结果未知不自动重试，安全查询最多重试一次。
+- `/chat/local` 同时返回稳定 `run`、结构化 `artifacts`、兼容 `reply/trace` 和安全 JSON 错误。
+- 前端优先消费结构化 Artifact，并显示后端非 2xx 错误详情。
+
+实际验证：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+结果：237 passed。
+
+```powershell
+cd music-agent-chat-ui
+corepack pnpm@10.5.1 exec playwright test tests/localChatApi.spec.ts --reporter=line --workers=1
+corepack pnpm@10.5.1 exec tsc --noEmit
+corepack pnpm@10.5.1 exec prettier --check src/features/chat-local tests/localChatApi.spec.ts
+corepack pnpm@10.5.1 run lint
+corepack pnpm@10.5.1 run build
+```
+
+结果：Playwright 3 passed；TypeScript 和 Prettier 通过；lint 0 error（保留既有 warnings）；Next production build 成功并生成 11 个静态页面。
+
+未完成证据边界：
+
+- 没有使用真实 QQ Credential 执行创建歌单、加歌、播放等副作用 E2E。
+- 没有执行真实 DeepSeek/OpenAI 兼容模型的浏览器完整聊天 E2E。
+- 没有验证多进程、多实例或加密数据库部署。
+
 ## 2026-06-11：结构化 Artifact 链路源码更新（待运行时验证）
 
 状态：源码已更新；用户要求由用户自行测试，因此本轮没有运行后端测试、前端构建或浏览器验收。

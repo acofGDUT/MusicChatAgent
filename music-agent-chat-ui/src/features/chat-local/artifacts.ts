@@ -48,7 +48,9 @@ export function isPlayMusicArtifact(v: unknown): v is PlayMusicArtifactData {
   );
 }
 
-export function isPlaylistBrowserArtifact(v: unknown): v is PlaylistBrowserArtifactData {
+export function isPlaylistBrowserArtifact(
+  v: unknown,
+): v is PlaylistBrowserArtifactData {
   if (!v || typeof v !== "object") return false;
   const d = v as Record<string, unknown>;
   return (
