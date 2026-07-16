@@ -18,6 +18,14 @@ CREDENTIAL_PATH = str(Path(settings.BASE_DIR) / "data" / "credential.json")
 GLOBAL_CREDENTIAL: Credential | None = None
 
 
+class AuthenticationRequiredError(RuntimeError):
+    """No authenticated QQ Music identity is available."""
+
+
+class AuthenticationUnavailableError(RuntimeError):
+    """The local credential could not be loaded safely."""
+
+
 async def _ensure_credential_parent_dir() -> None:
     Path(CREDENTIAL_PATH).parent.mkdir(parents=True, exist_ok=True)
 
@@ -49,6 +57,32 @@ async def ensure_credential_loaded() -> bool:
 
     GLOBAL_CREDENTIAL = credential
     return True
+
+
+async def get_authenticated_user_id() -> str:
+    """Resolve the current server-side identity without exposing credentials."""
+    try:
+        ready = await ensure_credential_loaded()
+    except Exception as exc:
+        logger.warning("读取本地认证状态失败 | error_type=%s", type(exc).__name__)
+        raise AuthenticationUnavailableError("认证状态暂时不可用") from exc
+
+    # Read the module global only after lazy loading has completed. Keeping a
+    # from-import binding would retain the old None value.
+    credential = GLOBAL_CREDENTIAL
+    if not ready or credential is None:
+        raise AuthenticationRequiredError("请先登录 QQ 音乐")
+
+    raw_candidates = (
+        getattr(credential, "musicid", None),
+        getattr(credential, "str_musicid", None),
+    )
+    for candidate in raw_candidates:
+        user_id = str(candidate or "").strip()
+        if user_id and user_id != "0" and 1 <= len(user_id) <= 128:
+            return user_id
+
+    raise AuthenticationRequiredError("请先登录 QQ 音乐")
 
 
 async def check_or_refresh_credential() -> dict:

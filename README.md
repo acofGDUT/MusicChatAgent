@@ -51,6 +51,22 @@
 pip install -r requirements.txt
 ```
 
+复制并填写后端环境配置：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+以下两项控制本地会话持久化：
+
+```dotenv
+LANGGRAPH_STRICT_MSGPACK=true
+MUSIC_AGENT_STATE_DB=data/music_agent.sqlite3
+```
+
+- `LANGGRAPH_STRICT_MSGPACK` 必须在任何 LangGraph 模块导入前设置；缺失时后端会拒绝启动，避免 checkpoint 使用非严格序列化。
+- `MUSIC_AGENT_STATE_DB` 的相对路径始终相对项目根目录解析，默认数据库为 `data/music_agent.sqlite3`。
+
 启动后端：
 
 ```bash
@@ -169,6 +185,15 @@ pip install -r requirements.txt
 - 后端默认 8000
 
 如端口被占用，请关闭占用进程，或修改启动端口并同步更新前端环境变量。
+
+### 8.5 本地会话与偏好数据
+
+- FastAPI 使用 SQLite 保存 LangGraph checkpoint，服务重启后可以按当前 QQ 账号和 `thread_id` 恢复对话状态。
+- 结构化偏好按当前本机 QQ Music Credential 派生的用户标识隔离；客户端不能自行提交 `user_id`。
+- 当前身份绑定只适用于本地单账号/演示环境，不是 Session、JWT 或完整多用户认证系统。
+- SQLite 文件没有加密，不应放置在共享目录，也不适合直接用于生产级多实例部署。
+- 删除 `MUSIC_AGENT_STATE_DB` 指向的 SQLite 文件会同时清除会话 checkpoint 和结构化用户偏好。
+- SQLite、WAL、SHM、Credential 和 Cookie 文件均不应提交到 Git。
 
 ---
 

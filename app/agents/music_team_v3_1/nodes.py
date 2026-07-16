@@ -1,32 +1,27 @@
 import json
 import logging
 import re
-import uuid
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from app.schemas import artifact_to_json, parse_artifact_text
+from app.schemas.preferences import PreferencePatch, UserPreferences
+from app.services.memory import DISABLED_PREFERENCES, PreferenceRepository
 from app.services.music.playlist_service import playlist_service
 from app.tools.tool_result import ToolResult, ToolResultCode, parse_tool_result
 
 from .agents import chat_replier, music_executor, music_retry_executor, playback_executor
 from .config import (
-    ENABLE_SOUL_AUTOTUNE,
-    HISTORY_PATH,
     MAX_EXECUTOR_REENTRY_WITHOUT_USER,
     SOUL_PATH,
-    SUMMARY_KEEP_MESSAGES,
     SUMMARY_TRIGGER_TOKENS,
-    USER_PROFILE_PATH,
     llm0,
 )
-from .prompts import intent_parser_prompt, profile_update_prompt, soul_tune_prompt, summary_prompt
+from .prompts import intent_parser_prompt, preference_extraction_prompt, summary_prompt
 from .state import IntentParserDecision, MusicGraphStateV31
 from .utils import (
-    append_jsonl,
     build_runtime_messages,
-    collect_tool_calls,
     ensure_memory_files,
     estimate_tokens,
     extract_current_tool_run,
@@ -37,14 +32,13 @@ from .utils import (
     current_tool_names,
     has_required_tool_messages,
     is_json_like_text,
+    has_explicit_preference_cue,
     last_user_text,
-    looks_like_valid_soul_markdown,
+    mark_ai_message_user_visible,
     msg_content,
-    now_iso,
     read_text,
-    safe_message_preview,
+    sanitize_ai_message_metadata,
     update_last_search_results,
-    write_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -229,14 +223,87 @@ def _replace_last_ai_content(messages: list[Any], content: str) -> tuple[list[An
     return messages, False
 
 
-def init_memory_node(state: MusicGraphStateV31) -> MusicGraphStateV31:
+def _mark_last_playback_visible(messages: list[Any]) -> tuple[list[Any], bool]:
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if isinstance(message, AIMessage) and str(message.name or "") == "PlayAgent":
+            updated = list(messages)
+            updated[index] = mark_ai_message_user_visible(message, name="PlayAgent")
+            return updated, True
+    return messages, False
+
+
+async def init_memory_node(
+    state: MusicGraphStateV31,
+    *,
+    preference_repository: PreferenceRepository = DISABLED_PREFERENCES,
+) -> MusicGraphStateV31:
     ensure_memory_files()
     memory = dict(state.get("memory", {}))
-    memory.setdefault("user_profile_path", str(USER_PROFILE_PATH))
-    memory.setdefault("soul_path", str(SOUL_PATH))
-    memory.setdefault("history_path", str(HISTORY_PATH))
-    memory["user_profile"] = read_text(USER_PROFILE_PATH)
     memory["soul"] = read_text(SOUL_PATH)
+    memory.setdefault("summary_version", 0)
+    memory.setdefault("summary_message_count", 0)
+
+    user_id = str(state.get("user_id", "") or "")
+    storage_backend = str(getattr(preference_repository, "storage_backend", "disabled"))
+    if storage_backend not in {"sqlite", "disabled"}:
+        storage_backend = "disabled"
+    update_status = "skipped"
+    signal_count = 0
+    preferences = UserPreferences()
+    load_failed = False
+    try:
+        preferences = await preference_repository.get(user_id)
+    except Exception as exc:
+        logger.warning("用户偏好读取失败 | error_type=%s", type(exc).__name__)
+        update_status = "failed"
+        load_failed = True
+
+    latest_user_message = last_user_text(extract_messages(state))
+    if (
+        storage_backend == "sqlite"
+        and not load_failed
+        and has_explicit_preference_cue(latest_user_message)
+    ):
+        try:
+            extractor = llm0.with_structured_output(PreferencePatch)
+            extracted = extractor.invoke(
+                [
+                    SystemMessage(content=preference_extraction_prompt),
+                    HumanMessage(content=latest_user_message),
+                ]
+            )
+            patch = (
+                extracted
+                if isinstance(extracted, PreferencePatch)
+                else PreferencePatch.model_validate(extracted)
+            )
+            signal_count = len(patch.signals)
+            if patch.signals:
+                merge_result = await preference_repository.merge(user_id, patch)
+                preferences = merge_result.preferences
+                update_status = merge_result.status
+            else:
+                update_status = "unchanged"
+        except Exception as exc:
+            logger.warning("用户偏好更新失败 | error_type=%s", type(exc).__name__)
+            update_status = "failed"
+
+    memory.update(
+        {
+            "preferences": preferences.model_dump(
+                mode="json", exclude={"version", "updated_at"}
+            ),
+            "preference_version": preferences.version,
+            "last_preference_update_at": (
+                preferences.updated_at.isoformat() if preferences.updated_at else ""
+            ),
+            "preference_update_status": update_status,
+            "preference_signal_count": signal_count,
+            "storage_backend": storage_backend,
+            "user_id_present": bool(user_id),
+        }
+    )
 
     control = dict(state.get("control", {}))
     control.setdefault("max_reentry", MAX_EXECUTOR_REENTRY_WITHOUT_USER)
@@ -359,7 +426,10 @@ async def music_ops_subgraph_node(state: MusicGraphStateV31) -> MusicGraphStateV
         )
         executor = music_retry_executor if is_retry_attempt else music_executor
         result = await executor.ainvoke({"messages": build_runtime_messages(state, role="executor")})
-        ai_msg = extract_last_ai_message(result, fallback_name="MusicExecutor")
+        ai_msg = sanitize_ai_message_metadata(
+            extract_last_ai_message(result, fallback_name="MusicExecutor"),
+            name="MusicExecutor",
+        )
         result_messages = _agent_result_messages(result)
         extensions["current_tool_run"] = extract_current_tool_run(result_messages)
         _apply_tool_result_status(
@@ -389,7 +459,10 @@ async def playback_subgraph_node(state: MusicGraphStateV31) -> MusicGraphStateV3
 
     try:
         result = await playback_executor.ainvoke({"messages": build_runtime_messages(state, role="playback")})
-        ai_msg = extract_last_ai_message(result, fallback_name="PlayAgent")
+        ai_msg = sanitize_ai_message_metadata(
+            extract_last_ai_message(result, fallback_name="PlayAgent"),
+            name="PlayAgent",
+        )
         result_messages = _agent_result_messages(result)
         extensions["current_tool_run"] = extract_current_tool_run(result_messages)
         _apply_tool_result_status(
@@ -559,6 +632,13 @@ async def result_verifier_node(state: MusicGraphStateV31) -> MusicGraphStateV31:
                 messages,
                 "播放结果格式校验失败，暂时无法展示。",
             )
+        if intent == "playback":
+            if last_result is not None and not last_result.ok and not artifact_invalid:
+                messages, _ = _replace_last_ai_content(
+                    messages,
+                    last_result.message or "播放服务暂时不可用，请稍后重试。",
+                )
+            messages, _ = _mark_last_playback_visible(messages)
 
     if write_verification is not None:
         verification_status = write_verification
@@ -601,67 +681,30 @@ def memory_sync_node(state: MusicGraphStateV31) -> MusicGraphStateV31:
     messages = extract_messages(state)
     memory = dict(state.get("memory", {}))
     control = dict(state.get("control", {}))
-    task = dict(state.get("task", {}))
-
-    should_summarize = estimate_tokens(messages) >= SUMMARY_TRIGGER_TOKENS
-    should_update_profile = bool(messages) and task.get("status") in {"done", "waiting_user"}
-    should_update_soul = ENABLE_SOUL_AUTOTUNE and task.get("status") == "done"
-
-    control.update(
-        {
-            "should_summarize": should_summarize,
-            "should_update_profile": should_update_profile,
-            "should_update_soul": should_update_soul,
-        }
-    )
+    summary_count = max(0, int(memory.get("summary_message_count", 0) or 0))
+    summary_count = min(summary_count, len(messages))
+    delta = messages[summary_count:]
+    should_summarize = estimate_tokens(delta) >= SUMMARY_TRIGGER_TOKENS
+    control["should_summarize"] = should_summarize
 
     if should_summarize:
-        summary_input = "\n".join([f"{(m.get('type', 'unknown') if isinstance(m, dict) else getattr(m, 'type', 'unknown'))}:{msg_content(m)}" for m in messages])
-        memory["summary"] = msg_content(llm0.invoke(summary_prompt.format(messages=summary_input)))
-        memory["summary_version"] = int(memory.get("summary_version", 0)) + 1
-        if len(messages) > SUMMARY_KEEP_MESSAGES:
-            state["messages"] = messages[-SUMMARY_KEEP_MESSAGES:]
-
-    profile_text = memory.get("user_profile", read_text(USER_PROFILE_PATH))
-    soul_text = memory.get("soul", read_text(SOUL_PATH))
-
-    if should_update_profile:
-        latest = "\n".join([msg_content(m) for m in messages[-6:]])
-        profile_text = msg_content(llm0.invoke(profile_update_prompt.format(profile=profile_text, messages=latest)))
-        write_text(USER_PROFILE_PATH, profile_text)
-        memory["user_profile"] = profile_text
-        memory["last_profile_update_at"] = now_iso()
-
-    if should_update_soul:
-        latest = "\n".join([msg_content(m) for m in messages[-6:]])
-        candidate_soul = msg_content(llm0.invoke(soul_tune_prompt.format(soul=soul_text, messages=latest)))
-        if looks_like_valid_soul_markdown(candidate_soul):
-            soul_text = candidate_soul
-            write_text(SOUL_PATH, soul_text)
-            memory["soul"] = soul_text
-            memory["last_soul_update_at"] = now_iso()
-
-    history_event = {
-        "timestamp": now_iso(),
-        "event_id": str(uuid.uuid4()),
-        "thread_id": state.get("thread_id", ""),
-        "intent": task.get("intent", "music_ops"),
-        "task_status": task.get("status", "pending"),
-        "error_reason": task.get("error_reason", ""),
-        "tool_calls": collect_tool_calls(messages[-12:]),
-        "message_count": len(messages),
-        "message_tail": [
-            {
-                "type": (m.get("type", "unknown") if isinstance(m, dict) else getattr(m, "type", "unknown")),
-                "name": (m.get("name", "") if isinstance(m, dict) else getattr(m, "name", "")),
-                "preview": safe_message_preview(m),
-            }
-            for m in messages[-3:]
-        ],
-        "memory_update": {"summary": should_summarize, "profile": should_update_profile, "soul": should_update_soul},
-    }
-    append_jsonl(HISTORY_PATH, history_event)
-    memory["last_history_write_at"] = history_event["timestamp"]
+        summary_input = "\n".join(
+            f"{getattr(message, 'type', 'unknown')}:{msg_content(message)}"
+            for message in delta
+        )
+        try:
+            memory["summary"] = msg_content(
+                llm0.invoke(
+                    summary_prompt.format(
+                        previous_summary=str(memory.get("summary", "") or ""),
+                        messages=summary_input,
+                    )
+                )
+            )
+            memory["summary_version"] = int(memory.get("summary_version", 0) or 0) + 1
+            memory["summary_message_count"] = len(messages)
+        except Exception as exc:
+            logger.warning("会话摘要更新失败 | error_type=%s", type(exc).__name__)
 
     return {**state, "memory": memory, "control": control}
 
@@ -679,7 +722,10 @@ async def chat_replier_node(state: MusicGraphStateV31) -> MusicGraphStateV31:
         )
     )
     result = await chat_replier.ainvoke({"messages": [guidance, *build_runtime_messages(state, role="replier")]})
-    ai_msg = extract_last_ai_message(result, fallback_name="ChatReplier")
+    ai_msg = mark_ai_message_user_visible(
+        extract_last_ai_message(result, fallback_name="ChatReplier"),
+        name="ChatReplier",
+    )
 
     control = dict(state.get("control", {}))
     control["executor_reentry"] = 0

@@ -1,12 +1,25 @@
 import json
-from datetime import datetime
-from pathlib import Path
+import logging
+import sqlite3
+from datetime import datetime, timezone
+from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
 from langchain_core.messages import AIMessage, HumanMessage
 
-from app.agents.music_team_v3_1 import graph
+from app.agents.music_team_v3_1.utils import (
+    IdentityContext,
+    build_identity_context,
+    is_user_visible_ai_message,
+    msg_content,
+    now_ms,
+)
+from app.core.auth import (
+    AuthenticationRequiredError,
+    AuthenticationUnavailableError,
+    get_authenticated_user_id,
+)
 from app.schemas import PlayMusicArtifact, PlaylistBrowserArtifact
 
 
@@ -29,7 +42,18 @@ NODE_TO_AI_NAME = {
 }
 
 NON_LLM_TRACE_FIELDS = {
-    "init_memory": ["intent", "status", "summary_version", "executor_reentry", "max_reentry"],
+    "init_memory": [
+        "intent",
+        "status",
+        "summary_version",
+        "preference_update_status",
+        "preference_version",
+        "preference_signal_count",
+        "storage_backend",
+        "user_id_present",
+        "executor_reentry",
+        "max_reentry",
+    ],
     "intent_parser": ["intent", "status", "is_ready_to_execute", "missing_slots"],
     "supervisor_router": ["intent", "status", "route", "executor_reentry", "max_reentry"],
     "result_verifier": [
@@ -39,7 +63,7 @@ NON_LLM_TRACE_FIELDS = {
         "retry_count",
         "verifier_route",
     ],
-    "memory_sync": ["status", "should_summarize", "should_update_profile", "should_update_soul"],
+    "memory_sync": ["status", "should_summarize", "summary_version"],
     "finalizer": ["status", "intent"],
 }
 
@@ -64,9 +88,12 @@ def _build_non_llm_trace_summary(node_name: str, node_output: dict) -> str:
         "max_reentry": control.get("max_reentry"),
         "is_ready_to_execute": control.get("is_ready_to_execute"),
         "should_summarize": control.get("should_summarize"),
-        "should_update_profile": control.get("should_update_profile"),
-        "should_update_soul": control.get("should_update_soul"),
         "summary_version": memory.get("summary_version"),
+        "preference_update_status": memory.get("preference_update_status"),
+        "preference_version": memory.get("preference_version"),
+        "preference_signal_count": memory.get("preference_signal_count"),
+        "storage_backend": memory.get("storage_backend"),
+        "user_id_present": memory.get("user_id_present"),
         "verification_status": verification.get("status"),
         "verification_code": verification.get("code"),
         "retry_scheduled": verification.get("retry_scheduled"),
@@ -146,10 +173,13 @@ from app.services.music.song_service import song_service
 from app.services.music.user_service import user_service
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class LocalChatRequest(BaseModel):
-    message: str
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=1, max_length=4000)
     thread_id: str | None = None
 
 
@@ -165,124 +195,198 @@ class LocalTraceEvent(BaseModel):
     is_json_like: bool
 
 
-def _history_file_path() -> Path:
-    return Path(__file__).resolve().parents[2] / "agents" / "memory" / "history.jsonl"
+def _music_graph_from_request(request: Request):
+    graph = getattr(request.app.state, "music_graph", None)
+    if graph is None:
+        raise HTTPException(
+            status_code=503,
+            detail="本地会话存储暂时不可用，请稍后重试",
+        )
+    return graph
 
 
-def _parse_history_timestamp(value: str) -> int:
+async def _resolve_identity(raw_thread_id: str | None) -> IdentityContext:
     try:
-        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
-    except Exception:
-        return 0
+        user_id = await get_authenticated_user_id()
+    except AuthenticationRequiredError as exc:
+        raise HTTPException(status_code=401, detail="请先登录 QQ 音乐") from exc
+    except AuthenticationUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="认证状态暂时不可用") from exc
+
+    try:
+        return build_identity_context(user_id, raw_thread_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="thread_id 格式无效") from exc
+
+
+def _checkpoint_config(identity: IdentityContext) -> dict[str, dict[str, str]]:
+    return {"configurable": {"thread_id": identity.checkpoint_thread_id}}
+
+
+def _is_storage_error(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, sqlite3.Error):
+            return True
+        module = type(current).__module__
+        if module.startswith(("aiosqlite", "langgraph.checkpoint.sqlite")):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _snapshot_base_ms(created_at: Any, message_count: int) -> int:
+    try:
+        if isinstance(created_at, datetime):
+            value = created_at
+        elif isinstance(created_at, str) and created_at:
+            value = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        else:
+            raise ValueError
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return max(1, int(value.timestamp() * 1000))
+    except (TypeError, ValueError, OverflowError):
+        return max(1, message_count)
+
+
+def _message_created_at_ms(message: Any) -> int | None:
+    additional_kwargs = getattr(message, "additional_kwargs", {})
+    value = additional_kwargs.get("created_at_ms") if isinstance(additional_kwargs, dict) else None
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
+def _visible_history_messages(messages: list[Any], snapshot_created_at: Any) -> list[dict[str, object]]:
+    visible: list[tuple[str, Any]] = []
+    for message in messages:
+        if isinstance(message, HumanMessage):
+            visible.append(("user", message))
+        elif is_user_visible_ai_message(message):
+            visible.append(("assistant", message))
+
+    base_ms = _snapshot_base_ms(snapshot_created_at, len(visible))
+    previous = 0
+    result: list[dict[str, object]] = []
+    for index, (role, message) in enumerate(visible):
+        fallback = base_ms - (len(visible) - 1 - index)
+        candidate = _message_created_at_ms(message) or fallback
+        timestamp = max(candidate, previous + 1)
+        previous = timestamp
+        result.append(
+            {
+                "role": role,
+                "content": msg_content(message),
+                "ts": timestamp,
+            }
+        )
+    return result
 
 
 @router.get("/chat/local/history")
-async def local_chat_history(thread_id: str = Query("local-web-thread"), limit: int = Query(40, ge=1, le=100)):
-    clean_thread_id = (thread_id or "").strip() or "local-web-thread"
-    history_path = _history_file_path()
-    if not history_path.exists():
-        return {"status": "success", "data": {"thread_id": clean_thread_id, "messages": []}}
-
-    messages: list[dict[str, object]] = []
-    seen: set[tuple[str, str]] = set()
-
+async def local_chat_history(
+    request: Request,
+    thread_id: str | None = Query(None),
+    limit: int = Query(40, ge=1, le=100),
+):
+    identity = await _resolve_identity(thread_id)
+    graph = _music_graph_from_request(request)
     try:
-        with history_path.open("r", encoding="utf-8") as fp:
-            for raw_line in fp:
-                line = raw_line.strip()
-                if not line:
-                    continue
+        snapshot = await graph.aget_state(_checkpoint_config(identity))
+    except Exception as exc:
+        if _is_storage_error(exc):
+            logger.error("读取本地会话历史失败 | error_type=%s", type(exc).__name__)
+            raise HTTPException(
+                status_code=503,
+                detail="本地会话存储暂时不可用，请稍后重试",
+            ) from exc
+        logger.error("读取本地会话历史异常 | error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="本地 Agent 执行失败，请稍后重试") from exc
 
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                entry_thread_id = str(entry.get("thread_id", "") or "").strip()
-                if entry_thread_id != clean_thread_id:
-                    continue
-
-                tail = entry.get("message_tail", [])
-                if not isinstance(tail, list):
-                    continue
-
-                base_ts = _parse_history_timestamp(str(entry.get("timestamp", "") or ""))
-                for offset, item in enumerate(tail):
-                    if not isinstance(item, dict):
-                        continue
-                    role = "user" if item.get("type") == "human" else "assistant" if item.get("type") == "ai" else ""
-                    content = str(item.get("preview", "") or "").strip()
-                    if not role or not content:
-                        continue
-
-                    key = (role, content)
-                    if messages and messages[-1]["role"] == role and messages[-1]["content"] == content:
-                        continue
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    messages.append({"role": role, "content": content, "ts": base_ts + offset})
-    except Exception:
-        return {"status": "success", "data": {"thread_id": clean_thread_id, "messages": []}}
-
-    return {"status": "success", "data": {"thread_id": clean_thread_id, "messages": messages[-limit:]}}
+    values = snapshot.values if snapshot is not None and isinstance(snapshot.values, dict) else {}
+    raw_messages = values.get("messages", [])
+    messages = raw_messages if isinstance(raw_messages, list) else []
+    visible = _visible_history_messages(messages, getattr(snapshot, "created_at", None))
+    return {
+        "status": "success",
+        "data": {"thread_id": identity.thread_id, "messages": visible[-limit:]},
+    }
 
 
 @router.post("/chat/local")
-async def local_chat(req: LocalChatRequest):
+async def local_chat(req: LocalChatRequest, request: Request):
     user_text = (req.message or "").strip()
     if not user_text:
-        return {"status": "error", "message": "message 不能为空"}
+        raise HTTPException(status_code=400, detail="message 不能为空")
 
-    thread_id = (req.thread_id or "local-default-thread").strip() or "local-default-thread"
+    identity = await _resolve_identity(req.thread_id)
+    graph = _music_graph_from_request(request)
+    config = _checkpoint_config(identity)
 
     trace: list[dict[str, object]] = []
     latest_messages: list[object] = []
+    human_message = HumanMessage(
+        content=user_text,
+        additional_kwargs={"created_at_ms": now_ms()},
+    )
 
-    async for event in graph.astream(
-        {
-            "thread_id": thread_id,
-            "messages": [HumanMessage(content=user_text)],
-        },
-        config={"configurable": {"thread_id": thread_id}},
-        stream_mode="updates",
-    ):
-        if not isinstance(event, dict):
-            continue
-
-        for node_name, node_output in event.items():
-            if node_name not in TRACE_NODE_NAMES:
+    try:
+        async for event in graph.astream(
+            {
+                "user_id": identity.user_id,
+                "thread_id": identity.thread_id,
+                "messages": [human_message],
+            },
+            config=config,
+            stream_mode="updates",
+        ):
+            if not isinstance(event, dict):
                 continue
+            for node_name, node_output in event.items():
+                if node_name not in TRACE_NODE_NAMES:
+                    continue
+                content = _extract_trace_content(node_name, node_output)
+                if content:
+                    trace.append(
+                        {
+                            "node": node_name,
+                            "content": content,
+                            "is_json_like": _looks_like_json(content),
+                        }
+                    )
+                if isinstance(node_output, dict):
+                    maybe_messages = node_output.get("messages", [])
+                    if isinstance(maybe_messages, list) and maybe_messages:
+                        latest_messages = maybe_messages
+    except Exception as exc:
+        if _is_storage_error(exc):
+            logger.error("写入本地会话失败 | error_type=%s", type(exc).__name__)
+            raise HTTPException(
+                status_code=503,
+                detail="本地会话存储暂时不可用，请稍后重试",
+            ) from exc
+        logger.error("本地 Agent 执行异常 | error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="本地 Agent 执行失败，请稍后重试") from exc
 
-            content = _extract_trace_content(node_name, node_output)
-            if not content:
-                continue
-
-            trace.append(
-                {
-                    "node": node_name,
-                    "content": content,
-                    "is_json_like": _looks_like_json(content),
-                }
-            )
-
-            if isinstance(node_output, dict):
-                maybe_messages = node_output.get("messages", [])
-                if isinstance(maybe_messages, list) and maybe_messages:
-                    latest_messages = maybe_messages
-
-    messages = latest_messages
-    ai_text = ""
-    for msg in reversed(messages):
-        if isinstance(msg, AIMessage):
-            ai_text = str(msg.content or "")
-            break
+    visible_reply = next(
+        (
+            message
+            for message in reversed(latest_messages)
+            if is_user_visible_ai_message(message)
+        ),
+        None,
+    )
+    if visible_reply is None:
+        raise HTTPException(status_code=500, detail="本地 Agent 执行失败，请稍后重试")
 
     return {
         "status": "success",
         "data": {
-            "thread_id": thread_id,
-            "reply": ai_text,
+            "thread_id": identity.thread_id,
+            "reply": msg_content(visible_reply),
             "trace": trace,
         },
     }

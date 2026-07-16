@@ -1,3 +1,3 @@
-from .graph import graph
+from .graph import build_graph, graph
 
-__all__ = ["graph"]
+__all__ = ["build_graph", "graph"]

@@ -8,6 +8,14 @@ from app.schemas.artifacts import (
     artifact_to_json,
     parse_artifact_text,
 )
+from app.schemas.preferences import (
+    PreferenceBucket,
+    PreferenceMergeResult,
+    PreferencePatch,
+    PreferenceSignal,
+    UserPreferences,
+    merge_preferences,
+)
 
 __all__ = [
     "Artifact",
@@ -16,4 +24,10 @@ __all__ = [
     "PlaylistTrack",
     "artifact_to_json",
     "parse_artifact_text",
+    "PreferenceBucket",
+    "PreferenceMergeResult",
+    "PreferencePatch",
+    "PreferenceSignal",
+    "UserPreferences",
+    "merge_preferences",
 ]

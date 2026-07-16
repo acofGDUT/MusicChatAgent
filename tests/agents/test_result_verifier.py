@@ -753,7 +753,7 @@ def test_init_memory_resets_retry_attempt_state_but_preserves_search_context(
         },
     }
 
-    output = init_memory_node(state)
+    output = asyncio.run(init_memory_node(state))
 
     assert output["control"]["retry_count"] == 0
     assert output["control"]["max_retries"] == 1
